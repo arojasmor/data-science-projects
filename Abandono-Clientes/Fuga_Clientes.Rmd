@@ -1,0 +1,2344 @@
+---
+title: "Modelo Predictivo: Abandono de Clientes"
+subtitle: "Proyecto Fuga de Clientes"
+author: "Alejandro Rojas Moreno"
+date: "9/12/2021"
+output:
+  html_document:
+    code_folding: show
+    code_download: true
+    df_print: paged
+    theme: spacelab
+    toc: true
+    toc_float: true
+editor_options:
+  chunk_output_type: console
+---
+
+<br>
+
+#  <span style="color:rgb(0, 0, 205)">Presentación</span>
+
+<div class=text-justify>
+En este proyecto se analizará la información de una base de datos referente a créditos a personas físicas, con el objetivo de identificar los factores que contribuyen en mayor medida a predecir la pérdida o fuga de clientes, así como estimar el periodo de tiempo antes de que ocurra el abandono.
+
+Se iniciará con un análisis exploratorio para conocer la estructura de la información así como también identificar si existen valores faltantes. Lo anterior, servirá para irnos familiarizando con la información.
+
+Se utilizarán varios algoritmos de **Aprendizaje Supervisado** para precedir la deserción, ya que es recomendable hacer comparaciones entre varios modelos, además, se irán identificando los factores más importantes que explican la fuga de clientes. También, se creará un modelo de **ensamble** como solución alternativa y se compararán sus resultados con los del mejor modelo.
+
+Finalmente, se construirá un modelo para predecir el tiempo o  momento de abandono.
+
+Los datos para este análisis provienen del repositorio de aprendizaje automático de [kaggle](https://www.kaggle.com/adammaus/predicting-churn-for-bank-customers#), que es un sitio web para la comunidad de **data science**, donde se pueden encontrar bases de datos para practicar y competir en proyectos. También, se encuentran en mi repositorio de [github](https://github.com/arojasmor/FugaClientes) junto con el código de esta publicación.
+</div>
+
+<br>
+
+#  <span style="color:rgb(0, 0, 205)">Contenido</span>
+
+* Presentación
+* Contenido
+* Set up
+* Carga y preparación de los datos
+* Análisis exploratorio
+* Pre procesamiento de los datos
+  + Selección de variables
+  + Codificación de variables categóricas
+  + Escalamiento
+  + Balanceo de clases
+* Métrica de evaluación
+* Creación de modelos de aprendizaje automático
+  + Modelo base: Naive Bayes
+  + Regresión Logística
+  + Máquinas de Vectores Soporte
+  + Random Forest
+  + Extreme Gradient Boosting (XGBoost)
+  + Redes Neuronales (RNN)
+  + Gradient Boosting Machine (GBM)
+* Comparación de modelos
+* Evaluación con datos de validación
+* Importancia de las variables
+* Ensamble
+* Elección del valor de corte adecuado
+* Evaluación final: datos de test
+* Identificando el tiempo de abandono del cliente
+* Conclusiones
+
+<br>
+
+#  <span style="color:rgb(0, 0, 205)">Set up</span>
+
+Iniciamos configurando las opciones generales que vamos a requerir para el desarrollo de este proyecto.
+
+```{r setup, message=FALSE, comment="", warning=FALSE, results='hide'}
+knitr::opts_chunk$set(echo = TRUE,
+                      warning = FALSE,
+                      message = FALSE,
+                      warning = FALSE,
+                      fig.align = "center"
+                      )
+
+
+paquetes <- c("knitr","tidyverse","ggplot2","gridExtra","DataExplorer","lubridate",
+              "scales","rpart","rpart.plot","kableExtra", "summarytools", "DT", "ggpubr",
+              "sfo", "plyr", "plotly", "psych", "janitor", "purrr", "caret", "ROSE", "klaR",
+              "parallel", "doSNOW", "recipes", "ranger", "randomForest", "ggthemes", "ROCR",
+              "sjPlot", "survival", "survminer", "pec")
+
+instalados <- paquetes %in% installed.packages()
+
+if(sum(instalados == FALSE) > 0) {
+  install.packages(paquetes[!instalados])
+}
+
+lapply(paquetes, require, character.only = TRUE)
+
+# se cargan funciones
+source("cutoff.R")
+
+```
+
+<br>
+
+#  <span style="color:rgb(0, 0, 205)">Carga y preparación de los datos</span>
+
+Comencemos por cargar el conjunto de datos y hacer un primer análisis descriptivo básico para tener una idea de su tamaño y el tipo de cada variable.
+
+```{r}
+creditos <- read_csv("Churn_Modelling.csv")
+
+creditos.raw <- creditos # para usarse al final con el modelo de permanencia
+
+str(creditos)
+
+DT::datatable(head(creditos, 20),
+              rownames = FALSE,
+              options = list(
+                pageLength = 5,
+                scrollX = TRUE))
+
+```
+
+Tenemos una base de 10,000 registros y 14 columnas, de las cuales solo 3 son de tipo character y el resto numéricas.
+
+La última característica, 'Exited', es la variable objetivo e indica si el cliente se ha ido o abandonado la institución (0 = No, 1 = Sí).
+
+<br>
+
+#  <span style="color:rgb(0, 0, 205)">Análisis exploratorio</span>
+
+Empecemos el análisis exploratorio identificando si hay datos faltantes y si los hay debemos conocer cuántos son y en qué variables:
+
+```{r}
+creditos %>% 
+  summarise_all(~sum(is.na(.))) %>% 
+  t()
+
+plot_missing(creditos, title = "Porcentaje de Datos Incompletos",
+             geom_label_args = list("size" = 3, "label.padding" = unit(0.1, "lines")),
+             ggtheme = theme_minimal())
+
+
+```
+
+<div class=text-justify>
+Los resultados anteriores y la gráfica muestran que en la base de datos no hay observaciones faltantes. Esto es buena noticia, ya que no tendremos que hacer ninguna imputación. Sin embargo, debemos checar, también, que no haya valores "NULL" en alguna parte de la base, porque suele pasar que dicha palabra esté escrita como texto, situación que no identificaría `R` como un valor perdido.
+</div>
+
+```{r}
+nulls <- function(variable) {
+  sum(if_else(variable == 'NULL', 1, 0))
+}
+
+creditos %>% 
+  mutate_all(as.character) %>% 
+  lapply(., nulls)
+```
+
+Afortunadamente, tampoco tenemos la palabra "NULL" dentro de la base de datos, por lo tanto, podemos seguir con el análisis descriptivo.
+
+Finalmente, comprobamos que no tenemos registros duplicados:
+
+```{r}
+nrow(creditos[duplicated(creditos), ])
+```
+
+Pasemos a ver algunos resúmenes estadísticos básicos de las variables numéricas para empezar a comprender mejor la información que tenemos:
+
+```{r message=FALSE}
+creditos %>% 
+  dplyr::select(-c("RowNumber", "CustomerId", "Surname", "Geography", "Gender")) %>% 
+  describeBy() %>% 
+  kable( 
+      format = "html",
+      digits = 2, 
+      size = 5,
+      caption = "Resumen Estadístico",
+      format.args = list(big.mark = ","),
+      table.attr = "style='width:50%;'") %>%
+  kable_styling(bootstrap_options = c("striped", "hover"))
+
+```
+
+De la tabla anterior, podemos identificar algunas cosas interesantes:
+
+* El rango de edad oscila entre 18 y 92 años, con un promedio de 39, aproximadamente.
+* La permanencia media es de 5 años, por lo que, la mayoría de los clientes son leales (mad de 3).
+* Aproximadamente el 50% de los clientes están activos.
+
+```{r}
+creditos %>%
+  group_by(Gender) %>%
+  summarise(num.customers = n(), 
+            media.crScore = round(mean(CreditScore), 2),
+            media.age = round(mean(Age), 2), 
+            media.tenure = round(mean(Tenure), 2),
+            media.balance = round(mean(Balance), 2),
+            media.salary = round(mean(EstimatedSalary), 2)) %>% 
+  kable( 
+      format = "html",
+      digits = 2,
+      align = "c",
+      caption = "Resumen Estadístico por Género",
+      format.args = list(big.mark = ","),
+      table.attr = "style='width:50%;'") %>%
+  kable_styling(bootstrap_options = c("striped", "hover"))
+
+```
+
+En este otro resumen estadístico por género podemos identificar:
+
+* Hay más clientes hombres que mujeres.
+* Las edades promedio de ambos géneros casi son iguales, siendo el de las mujeres 1 año mayor.
+* El tiempo de permanencia para ambos sexos es, prácticamente, el mismo: 5 años.
+* El saldo que mantienen ahorrado es mayor en los hombres.
+* La media del salario es ligeramente mayor en el grupo de las mujeres.
+
+Hay variables que son numéricas pero que deberían ser de tipo factor como, por ejemplo, la variable objetivo Exited. A continuación, se harán los cambios en los tipos, pero antes quitaremos las variables que no serán útiles para el análisis: RowNumber, CustomerId y Surname:
+
+```{r}
+creditos <- creditos %>% 
+  dplyr::select(-c(RowNumber, CustomerId, Surname))
+
+```
+
+```{r}
+a.factor <- c("Tenure", "NumOfProducts", "HasCrCard", "IsActiveMember", "Exited")
+
+creditos <- creditos %>% 
+  mutate_at(all_of(a.factor), as.factor)
+
+```
+
+Ahora, confirmamos que están bien los niveles de las variables que pasamos a tipo factor y de paso vemos sus proporciones:
+
+```{r}
+levels(creditos$Exited)
+
+prop.table(table(creditos$Exited))
+
+```
+
+La proporción de clientes que abandonaron es: **`r prop.table(table(creditos$Exited))[2]*100`%**
+
+La proporción de clientes que permanecen es: **`r prop.table(table(creditos$Exited))[1]*100`%**
+
+```{r}
+levels(creditos$NumOfProducts)
+
+prop.table(table(creditos$NumOfProducts))
+
+```
+
+La proporción de clientes con 1 producto es: **`r prop.table(table(creditos$NumOfProducts))[1]*100`%**
+
+La proporción de clientes con 2 productos es: **`r prop.table(table(creditos$NumOfProducts))[2]*100`%**
+
+La proporción de clientes con 3 productos es: **`r prop.table(table(creditos$NumOfProducts))[3]*100`%**
+
+La proporción de clientes con 4 productos es: **`r prop.table(table(creditos$NumOfProducts))[4]*100`%**
+
+```{r}
+levels(creditos$HasCrCard)
+
+prop.table(table(creditos$HasCrCard))
+
+```
+
+La proporción de clientes con tarjeta de crédito es: **`r prop.table(table(creditos$HasCrCard))[2]*100`%**
+
+La proporción de clientes sin tarjeta de crédito es: **`r prop.table(table(creditos$HasCrCard))[1]*100`%**
+
+```{r}
+levels(creditos$IsActiveMember)
+
+prop.table(table(creditos$IsActiveMember))
+
+```
+
+La proporción de los clientes activos es: **`r prop.table(table(creditos$IsActiveMember))[2]*100`%**
+
+La proporción de los clientes no activos es: **`r prop.table(table(creditos$IsActiveMember))[1]*100`%**
+
+Las variables que se pasaron a tipo factor están bien.
+
+&nbsp;
+
+Variables categóricas
+
+Se hará un análisis visual a las variables categóricas, para conocer sus distribuciones e identificar si presentan alta o baja cardinalidad.
+
+```{r}
+creditos %>% 
+  select_if(is.factor) %>% 
+  mutate(id = 1:nrow(.)) %>% 
+  pivot_longer(-id, names_to = 'variable', values_to = 'valor') %>% 
+  ggplot(aes(valor)) +
+  geom_bar() +
+  scale_y_continuous(labels = scales::comma) + 
+  facet_wrap(~variable, scales = 'free', ncol = 2)
+
+```
+
+```{r}
+creditos %>% 
+  select_if(is.character) %>% 
+  mutate(id = 1:nrow(.)) %>% 
+  pivot_longer(-id, names_to = 'variable', values_to = 'valor') %>% 
+  ggplot(aes(valor)) +
+  geom_bar() +
+  scale_y_continuous(labels = scales::comma) + 
+  facet_wrap(~variable, scales = 'free', ncol = 2)
+
+```
+
+Las variables categóricas se ven bien, solo la variable NumOfProducts podríamos modificarla para juntar el producto 4 con el producto 3 y nombrar este grupo como ">2"
+
+Ahora, veamos las distribuciones de las variables numéricas con apoyo de unos boxplots y de un resúmen estadístico básico.
+
+&nbsp;
+
+Variables numéricas
+
+```{r}
+creditos %>% 
+  select_if(is.numeric) %>% 
+  mutate(id = 1:nrow(.)) %>% 
+  pivot_longer(-id, names_to = 'variable', values_to = 'valor') %>% 
+  ggplot(aes(valor)) +
+  geom_boxplot(outlier.colour = "red", fill = '#A4A4A4', color = "darkred") +
+  scale_y_continuous(labels = scales::comma) + 
+  facet_wrap(~variable, scales = 'free', ncol = 2)+
+  coord_flip()
+
+```
+
+```{r message=FALSE}
+creditos %>% 
+  select_if(is.numeric) %>% 
+  mutate(id = 1:nrow(.)) %>% 
+  pivot_longer(-id, names_to = 'variable', values_to = 'valor') %>% 
+  ggplot(aes(valor)) +
+  geom_histogram(fill = "steelblue", color = "firebrick") +
+  scale_x_continuous(labels = scales::comma) + 
+  facet_wrap(~variable, scales = 'free', ncol = 2)
+
+```
+
+
+De los gráficos anteriores podemos identificar lo siguiente:
+
+* La variable Age, presenta algunos valores atípicos que parecen corresponder a personas entre los 60 y 92 años.
+* En la variable CreditScore, también, hay valores atípicos bajos (menores a 400 pts).
+* La variable Balance, quitando el bloque de clientes que no tienen saldo, presenta una distibución normal.
+* Finalmente, la variable EstimatedSalary presenta una distribución casi uniforme.
+
+```{r}
+correlacion <- creditos %>% 
+  select_if(is.numeric) %>% 
+  cor() %>% 
+  round(2)
+
+corPlot(correlacion, cex = 1.8, main = "Matriz de Correlación")
+
+```
+
+```{r}
+test.cor <- creditos %>% 
+  select_if(is.numeric)
+
+findCorrelation(cor(test.cor), cutoff = 0.5, names = TRUE )
+
+```
+
+<div class=text-justify>
+La gráfica de matriz muestra que no hay correlaciones altas entre las variables, por lo que, es buena noticia, ya que no tenemos el problema de la multicolinealidad. Lo anterior, también, se comprueba con la función findCorrelation del paquete caret en la cual se pone como umbral un coeficiente de correlación de 0.5 y los resultados muestran que no hay correlaciones que superan ese nivel.
+</div>
+
+```{r message=FALSE}
+creditos %>% 
+  select_if(is.numeric) %>% 
+  describeBy() %>% 
+  kable( 
+      format = "html",
+      digits = 2,
+      size = 5,
+      caption = "Resumen Estadístico: variables numéricas",
+      format.args = list(big.mark = ","),
+      table.attr = "style='width:50%;'") %>%
+  kable_styling(bootstrap_options = c("striped", "hover"))
+
+```
+
+&nbsp;
+
+A continuación, se crearán algunas gráficas combinando las variables para tener un panorama más completo e integral de los datos, además, esto servirá para ir identificando las posibles variables que pueden ser buenas predictoras.
+
+```{r}
+creditos %>% 
+  ggplot(aes(x = Geography, group = Gender)) + 
+    geom_bar(aes(y = ..prop.., fill = factor(..x..)), 
+    stat="count", color = "black", alpha = 0.7) +
+  scale_fill_manual(values = c("steelblue", "grey50", "cornflowerblue")) +
+    geom_text(aes(label = scales::percent(..prop..),
+    y= ..prop.. ), stat= "count", position = position_stack(vjust = 0.5), size = 4.5) +
+    facet_grid(~Gender) +
+    scale_y_continuous(labels = scales::percent)+
+    guides(fill = 'none')+
+    labs(title = "Género por País", 
+    x = "", y = "Porcentaje")+
+    theme_minimal()+
+    theme(text = element_text(size = 12), 
+    plot.title = element_text(hjust = 0.5), title = element_text(size = 12))
+
+```
+
+<div class=text-justify>
+Como se puede ver en el gráfico, la distribución geográfica de clientes para hombres y mujeres es muy similar. Aproximadamente, la misma cantidad de clientes provienen de los 3 países: la mitad proviene de Francia, una cuarta parte proviene de Alemania y otra cuarta parte, de España. Esto es similar tanto para hombres como para mujeres.
+</div>
+
+```{r message=FALSE}
+creditos %>% 
+  group_by(Gender, Geography) %>% 
+  summarise(media_sal = round(mean(EstimatedSalary), 2)) %>% 
+  ggplot(aes(x = Gender, y = media_sal, fill = Gender)) + 
+  scale_fill_manual(values = c("steelblue", "grey50")) +
+    geom_bar(stat = "identity", color = "black", alpha = 0.7) +
+    geom_text(aes(label = scales::comma(media_sal), 
+                  vjust = -.5), size = 4) +
+    facet_grid(~ Geography) +
+    labs(title = "Composición de Salarios por País", 
+    y = "Salario Medio") +
+    theme_minimal() +
+    coord_cartesian(ylim = c(95000, 103000)) +
+    scale_y_continuous(labels =  scales::comma) +
+    guides(fill = 'none') +
+    theme(text = element_text(size = 12), 
+    plot.title = element_text(hjust = 0.5), title = element_text(size = 12))
+
+```
+
+<div class=text-justify>
+Otro aspecto interesante para explorar es la distribución geográfica de los salarios entre hombres y mujeres. En la gráfica anterior, se observa que el salario promedio en Alemania es mayor que en los otros dos países, siendo el salario promedio de las mujeres el mayor. También hay un mayor salario promedio para las mujeres en España, mientras que en Francia la situación es al revés.
+
+Veamos cuántos clientes han abandonado por zona geográfica y género, para conocer más a profundidad la variable objetivo.
+</div>
+
+```{r message=FALSE}
+g1 <- ggplot(creditos, aes(x = Exited, 
+                           y = ..count../sum(..count..), fill = Exited)) + 
+          geom_bar(color = "black", alpha = 0.7) +
+  scale_fill_manual(values = c("steelblue", "grey50")) +
+          geom_text(aes(label = paste0(format((..count../sum(..count..))*100,
+                                              digits = 4),"%")), 
+          size = 4, stat= "count", position = position_stack(vjust = 0.5)) +
+          scale_y_continuous(labels = percent) +
+          labs(title = "Proporción de Abandono", y  = "Porcentaje") +
+          scale_x_discrete(name  = "¿El cliente abandonó?",
+                          breaks = c("0", "1"),
+                          labels = c("No", "Si")) +
+          theme_minimal() +
+          guides(fill = 'none') +
+          theme(text = element_text(size = 12), 
+          plot.title = element_text(hjust = 0.5), title = element_text(size = 8))
+
+g2 <- ggplot(creditos, aes(x = Exited, group = Gender)) + 
+    geom_bar(aes(y = ..prop.., fill = factor(..x..)), 
+    stat="count", color = "black", alpha = 0.7) +
+  scale_fill_manual(values = c("steelblue", "grey50")) +
+    geom_text(aes(label = scales::percent(..prop..),
+    y= ..prop.. ), stat= "count", position = position_stack(vjust = 0.5), size = 3) +
+    facet_grid(Gender ~ Geography) +
+    scale_y_continuous(labels = scales::percent) +
+    scale_x_discrete(name  = "¿El cliente abandonó?",
+                          breaks=c("0", "1"),
+                          labels=c("No", "Si")) +
+    guides(fill = 'none') +
+    labs(title = "Proporciones de abandono por Género y País",
+         y = "Porcentaje") +
+    theme_minimal() +
+    theme(text = element_text(size = 12), 
+    plot.title = element_text(hjust = 0.5), title = element_text(size = 8))
+
+grid.arrange(g1, g2, ncol = 2)
+
+```
+
+<div class=text-justify>
+En las gráficas anteriores podemos ver la información más importante sobre las tasas de abandono entre los clientes. Se puede decir que uno de cada cinco clientes abandonó la institución. Además, se puede observar que las tasas de abandono en Alemania son las más altas entre los demás países, lo anterior, también se ve reflejado tanto para hombres como para mujeres. La menor cantidad de abandono se localiza en Francia, mientras que España ocupa una posición intermedia.
+
+Además, algo importante a considerar es que los datos estan desbalanceados, por lo que, debemos tenerlo presente a la hora de construir los modelos.
+
+Tratemos de identificar, en promedio, el tiempo en el que los clientes abandonan el banco.
+</div>
+
+```{r}
+creditos.t <- creditos
+creditos.t$Tenure <- as.double(creditos.t$Tenure)
+
+duracion <- creditos.t %>% 
+  group_by(Exited) %>%
+  summarise(tiempo.promedio = round(mean(Tenure), 2))
+
+g3 <- ggplot(duracion, aes(x = Exited, y = tiempo.promedio, fill = Exited)) + 
+    geom_bar(stat = "identity", color = "black", alpha = 0.7) +
+    geom_text(aes(label = tiempo.promedio, vjust = -.5), size = 4) +
+    scale_x_discrete(name  = "El cliente abandonó?",
+                          breaks = c("0", "1"),
+                          labels = c("No", "Si")) +
+    theme_minimal() +
+  scale_fill_manual(values = c("steelblue", "grey50")) +
+    coord_cartesian(ylim = c(4.7, 6.1)) +
+    scale_y_continuous(breaks = seq(4.8, 6.1, 0.1)) +
+    guides(fill = 'none') +
+    theme(text = element_text(size = 12), 
+          plot.title = element_text(hjust = 0.5), title = element_text(size = 8)) +
+    labs(title = "Estatus Permanencia del Cliente", 
+         y = "Permanencia Promedio")
+
+
+duracion2 <- creditos.t %>% 
+  group_by(Exited, Gender, Geography) %>% 
+  summarise(tiempo.promedio = round(mean(Tenure), 2))
+
+g4 <- ggplot(duracion2, 
+             aes(x = Exited, y = tiempo.promedio, group = Gender, fill = Exited)) + 
+    geom_bar(stat = "identity", color = "black", alpha = 0.7) +
+    geom_text(aes(label = tiempo.promedio, vjust = -.5), size = 4) +
+    scale_x_discrete(name  = "El cliente abandonó?",
+                          breaks = c("0", "1"),
+                          labels = c("No", "Si"))+
+    facet_grid(Gender ~ Geography) +
+    theme_minimal() +
+    scale_fill_manual(values = c("steelblue", "grey50")) +
+    coord_cartesian(ylim=c(4.5, 6.2)) +
+    scale_y_continuous(breaks = seq(4.5, 6.2, 0.1)) +
+    guides(fill = 'none')+
+    theme(text = element_text(size = 12), 
+          plot.title = element_text(hjust = 0.5), title = element_text(size = 8)) +
+    labs(title = "Estatus Permanencia del Cliente por Género y País", 
+         y = "Permanencia Promedio")
+
+grid.arrange(g3, g4, ncol = 2)
+
+```
+
+En las gráficas de permanencia podemos destacar lo siguiente:
+
+* El tiempo promedio de permanencia entre los clientes que abandonan el banco y los que permanecen son muy parecidos.
+* España tiene los promedios más bajos de abandono tanto en hombres como para mujeres.
+* Alemania presenta el promedio más alto de abandono en el grupo de las mujeres y Francia en el grupo de los hombres.
+
+
+```{r message=FALSE}
+g5 <- creditos %>% 
+  ggplot(aes(x = Exited, y = Age)) +
+  geom_boxplot(outlier.color = "red", fill = '#A4A4A4', color = "darkred") +
+  labs(
+    title = "Edad"
+  )
+
+g6 <- creditos %>% 
+  ggplot(aes(x = Exited, y = EstimatedSalary)) +
+  geom_boxplot(outlier.color = "red", fill = '#A4A4A4', color = "darkred") +
+  scale_y_continuous(labels = scales::comma) +
+  labs(
+    title = "Salario"
+  )
+
+g7 <- creditos %>% 
+  ggplot(aes(x = Exited, y = Balance)) +
+  geom_boxplot(outlier.color = "red", fill = '#A4A4A4', color = "darkred") +
+  scale_y_continuous(labels = scales::comma) +
+  labs(
+    title = "Balance"
+  )
+
+g8 <- creditos %>% 
+  ggplot(aes(x = Exited, y = CreditScore)) +
+  geom_boxplot(outlier.color = "red", fill = '#A4A4A4', color = "darkred") +
+  labs(
+    title = "CreditScore"
+  )
+
+grid.arrange(g5, g6, g7, g8, ncol = 2)
+
+```
+
+En estas ultimas gráficas podemos apreciar que de las variables numéricas solo la edad pueder ser buen predictor, ya que las cajas de los boxplots no se solapan a diferencia de las demás variables.
+
+<br>
+
+#  <span style="color:rgb(0, 0, 205)">Pre procesamiento de los datos</span>
+
+El preprocesamiento de datos es el proceso de convertir datos sin procesar o "crudos" en un formato legible que es adecuado para construir y entrenar modelos de aprendizaje automático.
+
+##  <span style="color:rgb(0, 0, 205)">Selección de variables</span>
+
+<div class=text-justify>
+Casi al inicio del proyecto se empezó a realizar la selección de variables cuando se eliminaron las columnas 'RowNumber', 'CustomerId' y 'Surname'. En la sección del análisis exploratorio identificamos varias características más que pueden descartarse ya que no proporcionan ningún valor para predecir nuestra variable objetivo: Exited.
+</div>
+
+* La variable EstimatedSalary muestra una distribución casi uniforme para ambos tipos de clientes, por lo que, se puede descartar.
+* Las categorías de 'Tenure' y 'HasCrCard' tienen una tasa de abandono similar (alrededor de 20%) y se consideran redundantes. Esto se puede confirmar con una prueba de chi-cuadrado:
+
+```{r}
+creditos %>% 
+  tabyl(Tenure, Exited, show_missing_levels = FALSE) %>% 
+  adorn_totals("row") %>%
+  adorn_percentages("all") %>%
+  adorn_pct_formatting(digits = 1) %>%
+  adorn_ns %>%
+  adorn_title
+
+creditos %>% 
+  tabyl(HasCrCard, Exited, show_missing_levels = FALSE) %>% 
+  adorn_totals("row") %>%
+  adorn_percentages("all") %>%
+  adorn_pct_formatting(digits = 1) %>%
+  adorn_ns %>%
+  adorn_title
+
+```
+
+```{r}
+t <- creditos %>% 
+  select_if(is.factor)
+
+categorias <- t %>% 
+  dplyr::select(-Exited) %>%
+  names()
+
+chi <- vector()
+p.value <- vector()
+
+for (columna in categorias){
+  
+  test <- stats::chisq.test(t[columna], t$Exited)
+  
+  chi <- append(chi, test[["statistic"]][["X-squared"]])
+  p.value <- append(p.value, test[["p.value"]])
+  
+  }
+
+df.chi <- data.frame(categorias, chi, p.value) %>% 
+  arrange(desc(-p.value))
+
+df.chi %>% 
+  kable(caption = "Prueba Chi-cuadrada", align = "c") %>%
+  kable_styling(bootstrap_options = c("striped", "hover"))
+
+```
+
+<div class=text-justify>
+Las variables Tenure y HasCrCard tienen un chi-cuadrado pequeño y un p-valor mayor que 0.05 (nivel de significancia estándar), lo que confirma la conclusión anterior de que estas dos características no transmiten ninguna información útil. Por lo tanto, se recomienda eliminarlas del análisis, sin embargo, para poder tomar esa decisión con mayor certeza, se identificará la importancia que tiene cada variable.
+</div>
+
+Importancia de las variables
+
+```{r}
+creditos.rf <- map_if(.x = creditos, .p = is.character, .f = as.factor) %>%
+  as.data.frame()
+
+modelo.importancia <- randomForest(formula = Exited ~ . ,
+                                   data = na.omit(creditos),
+                                   mtry = 5, 
+                                   importance = TRUE,
+                                   ntree = 1000)
+
+importancia <- as.data.frame(modelo.importancia$importance)
+importancia <- rownames_to_column(importancia, var = "variable")
+
+g9 <- ggplot(data = importancia, 
+             aes(x = reorder(variable, MeanDecreaseAccuracy), 
+                 y = MeanDecreaseAccuracy, fill = MeanDecreaseAccuracy)) + 
+  labs(x = "variable",
+       title = "Reducción de Accuracy") +
+  geom_col() + 
+  coord_flip() +
+  theme_bw() +
+  theme(legend.position = "bottom")
+
+g10 <- ggplot(data = importancia,
+              aes(x = reorder(variable, MeanDecreaseGini),
+                  y = MeanDecreaseGini, fill = MeanDecreaseGini)) +
+  labs(x = "variable", title = "Reducción de pureza (Gini)") +
+  geom_col() +
+  coord_flip() +
+  theme_bw() +
+  theme(legend.position = "bottom")
+
+ggarrange(g9, g10)
+
+```
+
+<div class=text-justify>
+En ambas gráficas, la variable HasCrcard tiene muy poca influencia sobre la variable objetivo. La variable Tenure parece que puede aportar algo al modelo, sin embargo, como se vio, anteriormente, dicha variable presenta una distribución uniforme, por lo que, no será un buen predictor. Lo mismo pasa con la variable EstimatedSalary.
+</div>
+
+```{r message=FALSE}
+creditos %>% 
+  ggplot(aes(x = Tenure, y = ..count.., fill = Exited)) +
+  geom_bar() +
+  scale_fill_manual(values = c("steelblue", "gray50")) +
+  labs(title = "Tenure")
+
+creditos %>% 
+  ggplot(aes(x = EstimatedSalary, y = ..count.., fill = Exited)) +
+  geom_histogram() +
+  scale_fill_manual(values = c("steelblue", "gray50")) +
+  labs(title = "EstimatedSalary")
+
+```
+
+En las gráficas, ambas variables no muestran ser diferenciadoras o influyentes para determinar si un cliente se queda o abandona el banco, además, esto ya se había sospechado al ver los boxplots. Por tanto se eliminan.
+
+```{r}
+creditos <- creditos %>% 
+  dplyr::select(-c(Tenure, HasCrCard, EstimatedSalary))
+
+```
+
+<br>
+
+##  <span style="color:rgb(0, 0, 205)">Codificación de variables categóricas</span>
+
+<div class=text-justify>
+La mayoría de los algoritmos de machine learning, generalmente, requieren que todas las características de entrada (y salida) sean numéricas. Por lo que, las variables categóricas deben convertirse (codificarse) en números antes de construir los modelos.
+
+Hasta el aquí, el conjunto de datos contiene dos características que requieren codificación: Gender y Geography.
+
+* Vamos a recodificar: masculino = 1 y Femenino = 0
+* Para la variable Geography, se crearán solo dos grupos, Alemania = 1 y el resto en la categoría otros = 0, ya que en Francia y España la tasa de abandono es casi la misma y en Alemania es bastante baja, por lo que, creando estos dos grupos se podrá diferenciar mejor esta variable y le vendrá bien a los algoritmos.
+</div>
+
+```{r}
+creditos$Gender <- ifelse(creditos$Gender == 'Female', 0, 1)
+creditos$Gender <- as.factor(creditos$Gender)
+
+creditos$Geography <- ifelse(creditos$Geography == 'France' | creditos$Geography =='Spain',
+                             0, 1)
+
+creditos$Geography <- as.factor(creditos$Geography)
+
+creditos <- creditos %>% 
+  mutate(NumOfProducts = fct_collapse(NumOfProducts,
+                                      '1' = '1',
+                                      '2' = '2',
+                                      other_level = '>2'))
+
+```
+
+<br>
+
+##  <span style="color:rgb(0, 0, 205)">Escalamiento</span>
+
+<div class=text-justify>
+El escalado de características es una técnica que se utiliza para normalizar el rango de variables en un conjunto de datos cuando éstas tienen diferentes magnitudes, por ejemplo, no es la misma diferencia entre el rango de la edad y el rango del Balance. Para que las variables con magnitudes grandes no dominen el resto de los datos se deben escalar todas las variables. Algunos algoritmos son sensibles a la escala de características (por ejemplo, SVM), mientras que otros son invariantes (por ejemplo, bosques aleatorios).
+</div>
+
+```{r}
+s <- c("Age", "Balance", "CreditScore")
+
+creditos[s] <- scale(creditos[s])
+
+```
+
+<br>
+
+##  <span style="color:rgb(0, 0, 205)">Balanceo de clases</span>
+
+Como hemos visto anteriormente, existe un desbalanceo en las clases de la variable objetivo, con una clase (0 = no abandono) mucho más prevalente que la otra (1 = abandono):
+
+```{r}
+table(creditos$Exited)
+```
+
+Antes de seguir adelante, por conveniencia, vamos a recodificar la variable Exited para que las clases queden de la siguiente manera:
+
+* clase positiva: **churn (abandona)**
+* clase negativa: **stay (permanece)**
+
+```{r}
+creditos$Exited <- ifelse(creditos$Exited == '1', 'churn', 'stay')
+creditos$Exited <- as.factor(creditos$Exited)
+
+table(creditos$Exited)
+
+```
+
+<div class=text-justify>
+El desbalanceo de clases suele ser un problema frecuente sobre todo en modelos de abandono de clientes o en temas de riesgo o fraudes. La clasificación que utiliza datos desequilibrados está sesgada a favor de la clase mayoritaria, lo que significa que los algoritmos de machine learning probablemente darán como resultado modelos que hacen poco más que predecir la clase más común. Además, las métricas comunes pueden ser engañosas cuando se manejan datos con desequilibrio de clases (por ejemplo, si un conjunto de datos contiene 99,9% de la clase "0" y 0,01% de la clase "1", un clasificador que siempre predice "0" tendrá una precisión del 99,9%). Además, dan lugar a predicciones sesgadas.
+
+Existen algunas estrategias que pueden abordar este problema como, por ejemplo, el submuestreo,  sobremuestreo, generación de datos sintéticos, etc. Sin embargo, antes de continuar dividiremos el conjunto de datos en una parte de entrenamiento, validación  y prueba, para evitar caer en un sobreajuste en el desempeño de los modelos. Las divisiones serán: 70%-15%-15%, respectivamente.
+
+**Entrenamiento:**
+
+Es el conjunto de datos que se utiliza para entrenar y hacer que el modelo aprenda las características / patrones ocultos en los datos.
+
+**Validación:**
+
+El conjunto de validación es un conjunto de datos separado del conjunto de entrenamiento, que se utiliza para validar el rendimiento de nuestro modelo durante el entrenamiento.
+
+**Prueba:**
+
+El conjunto de prueba es un conjunto separado de datos utilizados para probar el modelo después de completar el entrenamiento. Son observaciones que el algoritmo no ha visto.
+</div>
+
+```{r}
+set.seed(123)
+
+div1 <- createDataPartition(y = creditos$Exited,
+                                      p = 0.7, 
+                                      list = FALSE,
+                                      times = 1)
+
+creditos.train <- creditos[div1,] # entrenamiento
+creditos2 <- creditos[-div1,]
+
+
+div2 <- createDataPartition(y = creditos2$Exited,
+                                      p = 0.5, 
+                                      list = FALSE,
+                                      times = 1)
+
+
+creditos.validacion <- creditos2[div2,] # validacion
+creditos.test <- creditos2[-div2,] # prueba
+
+```
+
+Solo verificamos la distribución original de las clases en los tres conjuntos de datos:
+
+```{r}
+# train
+prop.table(table(creditos.train$Exited))
+nrow(creditos.train)
+
+# validacion
+prop.table(table(creditos.validacion$Exited))
+nrow(creditos.validacion)
+
+# test
+prop.table(table(creditos.test$Exited))
+nrow(creditos.test)
+
+```
+
+<div class=text-justify>
+Se utilizará la técnica de sobremuestreo **SMOTE (Synthetic Minority Oversampling Technique)**, que consiste en encontrar un registro que es similar al registro que se está muestreando y crea un registro sintético que es un promedio ponderado aleatoriamente del registro original y el registro vecino, donde el peso se genera por separado para cada predictor. Para generar datos artificiales, utiliza bootstrapping y k-vecinos más cercanos.
+</div>
+
+```{r}
+set.seed(123)
+
+creditos.bal <- ROSE(Exited ~ ., 
+                  data = creditos.train,
+                  seed = 1)$data
+
+table(creditos.bal$Exited)
+prop.table(table(creditos.bal$Exited))
+
+```
+
+<br>
+
+#  <span style="color:rgb(0, 0, 205)">Métrica de evaluación</span>
+
+<div class=text-justify>
+Es indispensable definir, en los modelos de aprendizaje supervisado, una métrica que sirva para evaluar la capacidad predictiva del modelo final, ademas, servirá para ir comparando los modelos generados así como su calibración.
+
+Como este proyecto aborda un problema de clasificación, ya que la variable a predecir es categórica, y lo que se pretende es que el modelo clasifique correctamente las observaciones de la clase positiva, es decir, los clientes que abandonan, por ser más crítico para el banco, la métrica de evaluación elegida será la **Sensibilidad o Recall**, porque esta métrica representa la fracción de verdaderos positivos, para tenerlos bien identificados y dirigir campañas de fidelización con el objetivo de que no se vayan. En otras palabras, queremos evitar clasificar a un cliente que abandona el banco en la clase de los que permaneceran.
+</div>
+
+La fórmula es:
+
+**Sensitivity = VP/(VP + FN)**
+
+VP: Verdaderos positivos
+
+FN: Falsos negativos
+
+<br>
+
+# <span style="color:rgb(0, 0, 205)">Creación de modelos de aprendizaje automático</span>
+
+<div class=text-justify>
+Siempre que se va a hacer un modelo de machine learning y en específico un modelo de aprendizaje supervisado es altamente recomendable iniciar creando un modelo base a partir del cual se tratará de mejorar los resultados ya sea calibrando sus hiperparámetros (si los tiene) o creando otros algoritmos.
+
+Para tener una medida de referencia y sobre la cual mejorar esos resultados, se creará un modelo que será: Naive Bayes.
+</div>
+
+##  <span style="color:rgb(0, 0, 205)">Modelo base: Naive Bayes</span>
+
+Como se va a utilizar el paquete **caret**, por conveniencia vamos a crear el objeto recipe, para poder ejecutar los algoritmos:
+
+```{r}
+# Se crea un objeto recipe
+objeto.recipe <- recipe(formula = Exited ~ CreditScore + Geography + Gender + Age +
+                          Balance + NumOfProducts + IsActiveMember,
+                        data = creditos.bal)
+
+objeto.recipe
+
+```
+
+```{r}
+# Se entrena el objeto recipe
+trained.recipe <- prep(objeto.recipe, training = creditos.bal)
+
+trained.recipe
+```
+
+```{r}
+# Se preparan los objetos
+creditos.train.prep <- bake(trained.recipe, new_data = creditos.bal)
+creditos.validacion.prep <- bake(trained.recipe, new_data = creditos.validacion)
+creditos.test.prep <- bake(trained.recipe, new_data = creditos.test)
+
+glimpse(creditos.train.prep)
+glimpse(creditos.validacion.prep)
+glimpse(creditos.test.prep)
+
+```
+
+<br>
+
+<span style="color:rgb(204, 153, 0)">Naive Bayes</span>
+
+```{r eval=FALSE}
+# paralelizacion del proceso
+cores <- detectCores()-1
+cl <- makeCluster(cores, type = "SOCK")
+registerDoSNOW(cl)
+
+# hiperparametros, no. repeticiones y semilla para cada repeticion
+particiones <- 10
+repeticiones <- 5
+
+hiperparametros <- data.frame(usekernel = FALSE, fL = 0 , adjust = 0)
+
+set.seed(123)
+
+seeds <- vector(mode = "list", length = (particiones * repeticiones) + 1) 
+
+for (i in 1:(particiones * repeticiones)) {
+  seeds[[i]] <- sample.int(1000, nrow(hiperparametros)) 
+  } 
+
+seeds[[(particiones * repeticiones) + 1]] <- sample.int(1000, 1)
+
+# definicion del entrenamiento
+control.train <- trainControl(method = "repeatedcv", 
+                              number = particiones, 
+                              repeats = repeticiones, 
+                              seeds = seeds, 
+                              returnResamp = "final", 
+                              verboseIter = FALSE,
+                              allowParallel = TRUE)
+
+# ajuste del modelo
+set.seed(342)
+
+modelo_nb <- train(Exited ~ ., 
+                   data = creditos.train.prep[-6],
+                   method = "nb",
+                   tuneGrid = hiperparametros,
+                   metric = "Accuracy",
+                   trControl = control.train)
+
+# se guarda el modelo
+saveRDS(modelo_nb, file = "modelo.nb.rds")
+
+```
+
+```{r}
+modelo_nb <- readRDS(file = "Modelos_2/modelo.nb.rds")
+```
+
+El Accuracy en el conjunto de entrenamiento del modelo Naive Bayes final fue de: **`r modelo_nb[["results"]][["Accuracy"]]*100`%**
+
+```{r message=FALSE}
+cm.nb <- confusionMatrix(predict(modelo_nb), creditos.train.prep$Exited, positive = "churn")
+
+draw_confusion_matrix(cm.nb)
+
+```
+
+La Sensitivity en el set de train fue de: **`r cm.nb[["byClass"]][["Sensitivity"]]*100`%**
+
+Ahora estamos listos para comenzar a construir modelos de aprendizaje automático. Los algoritmos clasificadores que se han seleccionado son los siguientes:
+
+* Logistic Regression (LOGIT)
+* Support Vector Machine (SVM)
+* Random Forest (RF)
+* Extreme Gradient Boosting (XGBoost)
+* Neuronal Network (NNET)
+* Gradient Boosting Machine (GBM)
+
+<br>
+
+<span style="color:rgb(204, 153, 0)">Regresión Logística</span>
+
+```{r eval=FALSE}
+# paralelizacion del proceso
+cores <- detectCores()-1
+cl <- makeCluster(cores, type = "SOCK")
+registerDoSNOW(cl)
+
+# hiperparametros, no. repeticiones y semilla para cada repeticion
+particiones <- 10
+repeticiones <- 5
+
+hiperparametros <- data.frame(parameter = "none")
+
+set.seed(123)
+
+seeds <- vector(mode = "list", length = (particiones * repeticiones) + 1) 
+
+for (i in 1:(particiones * repeticiones)) {
+  seeds[[i]] <- sample.int(1000, nrow(hiperparametros)) 
+  } 
+
+seeds[[(particiones * repeticiones) + 1]] <- sample.int(1000, 1)
+
+# definicion del entrenamiento
+control.train <- trainControl(method = "repeatedcv", 
+                              number = particiones, 
+                              repeats = repeticiones, 
+                              seeds = seeds, 
+                              returnResamp = "final", 
+                              verboseIter = FALSE,
+                              allowParallel = TRUE)
+
+# ajuste del modelo
+set.seed(342)
+
+modelo_logistic <- train(Exited ~ ., 
+                   data = creditos.train.prep,
+                   method = "glm",
+                   tuneGrid = hiperparametros,
+                   metric = "Accuracy",
+                   trControl = control.train,
+                   family = "binomial")
+
+# se guarda el modelo
+saveRDS(modelo_logistic, file = "modelo.logit.rds")
+```
+
+```{r}
+modelo_logistic <- readRDS(file = "Modelos_2/modelo.logit.rds")
+
+```
+
+El Accuracy en el conjunto de entrenamiento del modelo hecho con la Regresión Logística fue de: **`r modelo_logistic[["results"]][["Accuracy"]]*100`%**
+
+```{r}
+cm.lg <- confusionMatrix(predict(modelo_logistic), creditos.train.prep$Exited, positive = "churn")
+
+draw_confusion_matrix(cm.lg)
+
+```
+
+La Sensitivity en el set de train fue de: **`r cm.lg[["byClass"]][["Sensitivity"]]*100`%**
+
+<br>
+
+<span style="color:rgb(204, 153, 0)">Máquinas de Vector Soporte</span>
+
+```{r eval=FALSE}
+# paralelizacion del proceso
+cores <- detectCores()-1
+cl <- makeCluster(cores, type = "SOCK")
+registerDoSNOW(cl)
+
+# hiperparametros, no. repeticiones y semilla para cada repeticion
+particiones <- 10
+repeticiones <- 5
+
+hiperparametros <- expand.grid(sigma = c(0.001, 0.01, 0.1, 0.5, 1),
+                               C = c(1 , 20, 50, 100, 200, 500, 700))
+
+set.seed(123)
+
+seeds <- vector(mode = "list", length = (particiones * repeticiones) + 1) 
+
+for (i in 1:(particiones * repeticiones)) {
+  seeds[[i]] <- sample.int(1000, nrow(hiperparametros)) 
+  } 
+
+seeds[[(particiones * repeticiones) + 1]] <- sample.int(1000, 1)
+
+# definicion del entrenamiento
+control.train <- trainControl(method = "repeatedcv", 
+                              number = particiones, 
+                              repeats = repeticiones, 
+                              seeds = seeds, 
+                              returnResamp = "final", 
+                              verboseIter = FALSE,
+                              allowParallel = TRUE)
+
+# ajuste del modelo
+set.seed(342)
+
+modelo_svm <- train(Exited ~ ., 
+                   data = creditos.train.prep,
+                   method = "svmRadial",
+                   tuneGrid = hiperparametros,
+                   metric = "Accuracy",
+                   trControl = control.train)
+
+# se guarda el modelo
+saveRDS(modelo_svm, file = "modelo.svm.rds")
+```
+
+```{r}
+modelo_svm <- readRDS(file = "Modelos_2/modelo.svm.rds")
+
+```
+
+El accuracy promedio del modelo Support Vector Machine en el conjunto de entrenamiento fue de: **`r mean(modelo_svm[["results"]][["Accuracy"]])*100`%**
+
+```{r}
+cm.svm <- confusionMatrix(predict(modelo_svm), creditos.train.prep$Exited, positive = "churn")
+
+draw_confusion_matrix(cm.svm)
+
+```
+
+La Sensitivity en el set de train fue de: **`r cm.svm[["byClass"]][["Sensitivity"]]*100`%**
+
+```{r}
+# representacion gráfica
+ggplot(modelo_svm, highlight = TRUE) + 
+  labs(title = "Evolución del accuracy del modelo SVM Radial") +
+  theme_bw()
+
+```
+
+<br>
+
+<span style="color:rgb(204, 153, 0)">Random Forest</span>
+
+```{r eval=FALSE}
+# paralelizacion del proceso
+cores <- detectCores()-1
+cl <- makeCluster(cores, type = "SOCK")
+registerDoSNOW(cl)
+
+# hiperparametros, no. repeticiones y semilla para cada repeticion
+particiones <- 10
+repeticiones <- 5
+
+hiperparametros <- expand.grid(mtry = c(3, 4, 5, 7), 
+                               min.node.size = c(2, 3, 4, 5, 10, 15, 20, 30),
+                               splitrule = "gini")
+
+set.seed(123)
+
+seeds <- vector(mode = "list", length = (particiones * repeticiones) + 1) 
+
+for (i in 1:(particiones * repeticiones)) {
+  seeds[[i]] <- sample.int(1000, nrow(hiperparametros)) 
+  } 
+
+seeds[[(particiones * repeticiones) + 1]] <- sample.int(1000, 1)
+
+# definicion del entrenamiento
+control.train <- trainControl(method = "repeatedcv", 
+                              number = particiones, 
+                              repeats = repeticiones, 
+                              seeds = seeds, 
+                              returnResamp = "final", 
+                              verboseIter = FALSE,
+                              allowParallel = TRUE)
+
+# ajuste del modelo
+set.seed(342)
+
+modelo_rf <- train(Exited ~ ., 
+                   data = creditos.train.prep,
+                   method = "ranger",
+                   tuneGrid = hiperparametros,
+                   metric = "Accuracy",
+                   trControl = control.train,
+                   num.trees = 500)
+
+# se guarda el modelo
+saveRDS(modelo_rf, file = "modelo.rf.rds")
+```
+
+```{r}
+modelo_rf <- readRDS(file = "Modelos_2/modelo.rf.rds")
+
+```
+
+El Accuracy promedio del modelo Random Forest en el conjunto de entrenamiento fue de: **`r mean(modelo_rf[["results"]][["Accuracy"]])*100`%**
+
+```{r}
+cm.rf <- confusionMatrix(predict(modelo_rf), creditos.train.prep$Exited, positive = "churn")
+
+draw_confusion_matrix(cm.rf)
+
+```
+
+La Sensitivity en el set de train fue de: **`r cm.rf[["byClass"]][["Sensitivity"]]*100`%**
+
+```{r}
+# representación gráfica
+ggplot(modelo_rf, highlight = TRUE) + 
+  scale_x_continuous(breaks = 1:30) + 
+  labs(title = "Evolución del accuracy del modelo Random Forest") + 
+  guides(color = guide_legend(title = "mtry"), 
+         shape = guide_legend(title = "mtry")) +
+  theme_bw()
+
+```
+
+<br>
+
+<span style="color:rgb(204, 153, 0)">XGBoost</span>
+
+```{r eval=FALSE}
+cores <- detectCores()-1
+cl <- makeCluster(cores, type = "SOCK")
+registerDoSNOW(cl)
+
+# hiperparametros, no. repeticiones y semilla para cada repeticion
+particiones <- 10
+repeticiones <- 5
+
+hiperparametros <- expand.grid(eta = c(0.05, 0.075, 0.1),
+                         nrounds = c(50, 75, 100),
+                         max_depth = 6:8,
+                         min_child_weight = c(2.0, 2.25, 2.5),
+                         colsample_bytree = c(0.3, 0.4, 0.5),
+                         gamma = 0,
+                         subsample = 1)
+
+set.seed(123)
+
+seeds <- vector(mode = "list", length = (particiones * repeticiones) + 1) 
+
+for (i in 1:(particiones * repeticiones)) {
+  seeds[[i]] <- sample.int(1000, nrow(hiperparametros)) 
+  } 
+
+seeds[[(particiones * repeticiones) + 1]] <- sample.int(1000, 1)
+
+# definicion del entrenamiento
+control.train <- trainControl(method = "repeatedcv", 
+                              number = particiones, 
+                              repeats = repeticiones, 
+                              seeds = seeds, 
+                              returnResamp = "final", 
+                              verboseIter = FALSE,
+                              search = "grid",
+                              allowParallel = TRUE)
+
+# ajuste del modelo
+set.seed(342)
+
+modelo_boost <- train(Exited ~ ., 
+                      data = creditos.train.prep, 
+                      method = "xgbTree", 
+                      tuneGrid = hiperparametros,
+                      metric = "Accuracy", 
+                      trControl = control.train, 
+                      distribution = "adaboost",
+                      verbose = FALSE)
+
+# se guarda el modelo
+saveRDS(modelo_boost, file = "modelo.xgb.rds")
+```
+
+```{r}
+modelo_xgb <- readRDS(file = "Modelos_2/modelo.xgb.rds")
+```
+
+El accuracy promedio del modelo xgboost en el conjunto de entrenamiento fue de: **`r mean(modelo_xgb[["results"]][["Accuracy"]])*100`%**
+
+```{r}
+cm.xgb <- confusionMatrix(predict(modelo_xgb), creditos.train.prep$Exited, positive = "churn")
+
+draw_confusion_matrix(cm.xgb)
+
+```
+
+La Sensitivity en el set de train fue de: **`r cm.xgb[["byClass"]][["Sensitivity"]]*100`%**
+
+<br>
+
+<span style="color:rgb(204, 153, 0)">Redes Neuronales (RNN)</span>
+
+```{r eval=FALSE}
+cores <- detectCores()-1
+cl <- makeCluster(cores, type = "SOCK")
+registerDoSNOW(cl)
+
+# hiperparametros, no. repeticiones y semilla para cada repeticion
+particiones <- 10
+repeticiones <- 5
+
+hiperparametros <- expand.grid(size = c(10, 20, 50, 80, 100, 120), 
+                               decay = c(0.0001, 0.1, 0.5))
+
+set.seed(123)
+
+seeds <- vector(mode = "list", length = (particiones * repeticiones) + 1) 
+
+for (i in 1:(particiones * repeticiones)) {
+  seeds[[i]] <- sample.int(1000, nrow(hiperparametros)) 
+  } 
+
+seeds[[(particiones * repeticiones) + 1]] <- sample.int(1000, 1)
+
+# definicion del entrenamiento
+control.train <- trainControl(method = "repeatedcv", 
+                              number = particiones, 
+                              repeats = repeticiones, 
+                              seeds = seeds, 
+                              returnResamp = "final", 
+                              verboseIter = FALSE,
+                              allowParallel = TRUE)
+
+# ajuste del modelo
+set.seed(342)
+
+modelo_nnet <- train(Exited ~ ., 
+                      data = creditos.train.prep, 
+                      method = "nnet", 
+                      tuneGrid = hiperparametros,
+                      metric = "Accuracy", 
+                      trControl = control.train,
+                      rang =c(-0.7, 0.7),
+                      MaxNWts = 2000,
+                      trace = FALSE)
+
+# se guarda el modelo
+saveRDS(modelo_nnet, file = "modelo.nnet.rds")
+```
+
+```{r}
+modelo_nnet <- readRDS(file = "Modelos_2/modelo.nnet.rds")
+
+```
+
+El accuracy promedio del modelo nnet en el conjunto de entrenamiento fue de: **`r mean(modelo_nnet[["results"]][["Accuracy"]])*100`%**
+
+```{r}
+cm.nnet <- confusionMatrix(predict(modelo_nnet), creditos.train.prep$Exited, positive = "churn")
+
+draw_confusion_matrix(cm.nnet)
+
+```
+
+La Sensitivity en el set de train fue de: **`r cm.nnet[["byClass"]][["Sensitivity"]]*100`%**
+
+```{r}
+# representación gráfica
+ggplot(modelo_nnet, highlight = TRUE) + 
+  labs(title = "Evolución del Accuracy NNET") +
+  theme_bw()
+```
+
+<br>
+
+<span style="color:rgb(204, 153, 0)">Gradient Boosting Machine (GBM)</span>
+
+```{r eval=FALSE}
+cores <- detectCores()-1
+cl <- makeCluster(cores, type = "SOCK")
+registerDoSNOW(cl)
+
+# hiperparametros, no. repeticiones y semilla para cada repeticion
+particiones <- 10
+repeticiones <- 5
+
+hiperparametros <- expand.grid(interaction.depth = c(1, 2), 
+                               n.trees = c(500, 1000, 2000),
+                               shrinkage = c(0.001, 0.01, 0.1),
+                               n.minobsinnode = c(2, 5, 15))
+
+set.seed(123)
+
+seeds <- vector(mode = "list", length = (particiones * repeticiones) + 1) 
+
+for (i in 1:(particiones * repeticiones)) {
+  seeds[[i]] <- sample.int(1000, nrow(hiperparametros)) 
+  } 
+
+seeds[[(particiones * repeticiones) + 1]] <- sample.int(1000, 1)
+
+# definicion del entrenamiento
+control.train <- trainControl(method = "repeatedcv", 
+                              number = particiones, 
+                              repeats = repeticiones, 
+                              seeds = seeds, 
+                              returnResamp = "final", 
+                              verboseIter = FALSE,
+                              allowParallel = TRUE)
+
+# ajuste del modelo
+set.seed(342)
+
+modelo_gbm <- train(Exited ~ ., 
+                      data = creditos.train.prep, 
+                      method = "gbm", 
+                      tuneGrid = hiperparametros,
+                      metric = "Accuracy", 
+                      trControl = control.train,
+                      distribution = "adaboost",
+                      verbose = FALSE)
+
+# se guarda el modelo
+saveRDS(modelo_gbm, file = "modelo.gbm.rds")
+```
+
+```{r}
+modelo_gbm <- readRDS(file = "Modelos_2/modelo.gbm.rds")
+```
+
+El accuracy promedio del modelo gbm en el conjunto de entrenamiento fue de: **`r mean(modelo_gbm[["results"]][["Accuracy"]])*100`%**
+
+```{r}
+cm.gbm <- confusionMatrix(predict(modelo_gbm), creditos.train.prep$Exited, positive = "churn")
+
+draw_confusion_matrix(cm.gbm)
+
+```
+
+La Sensitivity en el set de train fue de: **`r cm.gbm[["byClass"]][["Sensitivity"]]*100`%**
+
+```{r}
+# representación gráfica
+ggplot(modelo_gbm, highlight = TRUE) + 
+  labs(title = "Evolución del Accuracy Gradient Boosting") +
+  guides(color = guide_legend(title = "shrinkage"),
+         shape = guide_legend(title = "shrinkage")) +
+  theme_bw() +
+  theme(legend.position = "bottom")
+
+```
+
+<br>
+
+#  <span style="color:rgb(0, 0, 205)">Comparación de modelos</span> 
+
+Finalmente, ya tenemos los modelos entrenados, por lo que, debemos identificar el que consigue mejores resultados para el problema que tenemos, que es el de predecir la fuga de clientes.
+
+Con apoyo de gráficos veremos el Accuracy y la Sensitivity de cada modelo, para facilitar la identificación.
+
+<span style="color:rgb(204, 153, 0)">Accuracy</span>
+
+<div class=text-justify>
+Antes de elaborar la primer gráfica correspondiente al Accuracy promedio, debemos identificar el **Accuracy basal**. En problemas de clasificación, es la moda de la variable objetivo, que en este caso es Exited. En la base que se está trabajando éste nivel basal está dado por la clase mayoritaria "0", que representa el 0.7963, el cual es el nivel mínimo que deben superar los modelos. Para que un modelo predictivo sea útil, debe de tener un porcentaje de acierto superior a lo esperado por azar.
+</div>
+
+```{r}
+prop.table(table(creditos$Exited))
+```
+
+```{r}
+models <- list(nb = modelo_nb, 
+               logistic = modelo_logistic,
+               rf = modelo_rf,
+               xgb = modelo_xgb,
+               svm = modelo_svm,
+               nnet = modelo_nnet,
+               gbm = modelo_gbm
+                )
+
+resultados <- resamples(models)
+
+metricas <- resultados$values %>% 
+  gather(key = "modelo", value = "valor", -Resample) %>% 
+  separate(col = "modelo", into = c("modelo", "metrica"), sep = "~", remove = TRUE)
+
+metricas %>% 
+  filter(metrica == "Accuracy") %>% 
+  group_by(modelo) %>% 
+  summarise(media = mean(valor)) %>% 
+  ggplot(aes(x = reorder(modelo, media), 
+             y = media, 
+             label = round(media, 2))) +
+  geom_segment(aes(x = reorder(modelo, media),
+                   y = 0,
+                   lwd = 2,
+                   xend = modelo, 
+                   yend = media), 
+               color = "darkblue",
+               lwd = 2) +
+  geom_point(size = 8.5, pch = 21, bg = "firebrick", color = "red") +
+  geom_text(color = "white", size = 3) + 
+  scale_y_continuous(limits = c(0, 1)) + 
+  geom_hline(yintercept = 0.79, linetype = "dashed") +
+  annotate(geom = "text", y = 0.84, x = 1.0, label = "Accuracy basal") +
+  labs(title = "Validación: Accuracy Promedio", 
+       subtitle = "Modelos ordenados por media", 
+       x = "modelo") + 
+  coord_flip() +
+  theme_bw()
+
+```
+
+<div class=text-justify>
+De los 7 modelos generados, solo tres son los que no superan el Accuracy basal: Naive Bayes, Regresión Logística y Gradient Boosting Machine. Hay que recordar que las clases están muy desbalanceadas, por lo que, son buenas noticias que la mayoría los modelos pasen ese nivel minimo. El modelo xgboost está a 0.006 de llegar al Accuracy basal, por lo que, se considera que pasa esta evaluación.
+</div>
+
+```{r message=FALSE}
+metricas %>% 
+  group_by(modelo, metrica) %>% 
+  summarise(media = mean(valor)) %>%
+  spread(key = metrica, value = media) %>%
+  arrange(desc(Accuracy)) %>% 
+  kable(align = "c", 
+        caption = "Promedio: Accuracy - Kappa",
+        format.args = list(big.mark = ","), 
+        ) %>%
+  kable_paper("hover", full_width = F)
+
+```
+
+```{r message=FALSE}
+metricas %>% 
+  filter(metrica == "Accuracy") %>% 
+  group_by(modelo) %>%
+  mutate(media = mean(valor)) %>% 
+  ungroup() %>%
+  ggplot(aes(x = reorder(modelo, media), y = valor, color = modelo)) + 
+  geom_boxplot(alpha = 0.6, outlier.shape = NA) +
+  geom_jitter(width = 0.1, alpha = 0.6) +
+  geom_hline(yintercept = 0.79, linetype = "dashed") +
+  annotate(geom = "text", y = 0.8, x = 1.0, label = "Accuracy basal") + 
+  theme_bw() + 
+  labs(title = "Validación: Accuracy Promedio",
+       subtitle = "Modelos ordenados por media") +
+  coord_flip() +
+  theme(legend.position = "none")
+  
+```
+
+<br>
+
+<span style="color:rgb(204, 153, 0)">Sensitivity</span>
+
+```{r}
+
+s.nb <- round(cm.nb[["byClass"]][["Sensitivity"]], digits = 2)
+s.lg <- round(cm.lg[["byClass"]][["Sensitivity"]], digits = 2)
+s.svm <- round(cm.svm[["byClass"]][["Sensitivity"]], digits = 2)
+s.rf <- round(cm.rf[["byClass"]][["Sensitivity"]], digits = 2)
+s.xgb <- round(cm.xgb[["byClass"]][["Sensitivity"]], digits = 2)
+s.nnet <- round(cm.nnet[["byClass"]][["Sensitivity"]], digits = 2)
+s.gbm <- round(cm.gbm[["byClass"]][["Sensitivity"]], digits = 2)
+
+comparacion.train <- tribble(
+  ~Modelo,~Sensibilidad,
+  'nb', s.nb,
+  'lg', s.lg,
+  'svm', s.svm,
+  'rf', s.rf,
+  'xgb', s.xgb,
+  'nnet', s.nnet,
+  'gbm', s.gbm
+  )
+
+comparacion.train$Modelo <- factor(comparacion.train$Modelo, 
+                                  levels = comparacion.train$Modelo
+                                  [order(comparacion.train$Sensibilidad)])
+
+comparacion.train %>% 
+  ggplot(aes(x = Modelo, y = Sensibilidad)) +
+  geom_segment(aes(x = Modelo, xend = Modelo, y = 0, yend = Sensibilidad),
+               color = "darkblue", lwd = 2) +
+  geom_point(size = 9.5, pch = 21, bg = "steelblue", col = "red") +
+  geom_text(aes(label = Sensibilidad), color = "white", size = 3.5) +
+  labs(title = "Comparación por Sensibilidad", 
+       y = "Modelo",
+       x = "Sensibilidad") +
+  coord_flip()
+
+```
+
+Nuevamente, los modelos que no superaron el Accuracy basal presentan la Sensitivity más bajas.
+
+<br>
+
+#  <span style="color:rgb(0, 0, 205)">Evaluación con datos de validación</span> 
+
+<div class=text-justify>
+A pesar de que algunos modelos tuvieron buen desempeño, la evaluación final se debe de hacer con un conjunto de observaciones diferente, porque son observaciones que los algoritmos no han visto, además, esto nos permitirá conocer si los modelos generaron sobreajuste.
+</div>
+
+```{r}
+# Naive Bayes
+
+preds.nb <- predict(modelo_nb, creditos.validacion.prep)
+cm.nb.val <- confusionMatrix(preds.nb, creditos.validacion.prep$Exited, positive = "churn")
+draw_confusion_matrix(cm.nb.val)
+
+# Logistic Regression
+
+preds.log <- predict(modelo_logistic, creditos.validacion.prep)
+cm.lg.val <- confusionMatrix(preds.log, creditos.validacion.prep$Exited, positive = "churn")
+draw_confusion_matrix(cm.lg.val)
+
+# Suport Vector Machine
+
+preds.svm <- predict(modelo_svm, creditos.validacion.prep)
+cm.svm.val <- confusionMatrix(preds.svm, creditos.validacion.prep$Exited, positive = "churn")
+draw_confusion_matrix(cm.svm.val)
+
+# Random Forest
+
+preds.rf <- predict(modelo_rf, creditos.validacion.prep)
+cm.rf.val <- confusionMatrix(preds.rf, creditos.validacion.prep$Exited, positive = "churn")
+draw_confusion_matrix(cm.rf.val)
+
+# Extreme Gradient Boosting
+
+preds.xgb <- predict(modelo_xgb, creditos.validacion.prep)
+cm.xgb.val <- confusionMatrix(preds.xgb, creditos.validacion.prep$Exited, positive = "churn")
+draw_confusion_matrix(cm.xgb.val)
+
+# Neuronal Network
+preds.nnet <- predict(modelo_nnet, creditos.validacion.prep)
+cm.nnet.val <- confusionMatrix(preds.nnet, creditos.validacion.prep$Exited, positive = "churn")
+draw_confusion_matrix(cm.nnet.val)
+
+# Gradient Boosting Machine
+
+preds.gbm <- predict(modelo_gbm, creditos.validacion.prep)
+cm.gbm.val <- confusionMatrix(preds.gbm, creditos.validacion.prep$Exited, positive = "churn")
+draw_confusion_matrix(cm.gbm.val)
+
+Accuracy.val <- tribble(
+  ~Modelo,~Accuracy,~Kappa,
+  'nb', cm.nb.val[["overall"]][["Accuracy"]], cm.nb.val[["overall"]][["Kappa"]],
+  'logistic', cm.lg.val[["overall"]][["Accuracy"]], cm.lg.val[["overall"]][["Kappa"]],
+  'svm', cm.svm.val[["overall"]][["Accuracy"]], cm.svm.val[["overall"]][["Kappa"]],
+  'rf', cm.rf.val[["overall"]][["Accuracy"]], cm.rf.val[["overall"]][["Kappa"]],
+  'xgb', cm.xgb.val[["overall"]][["Accuracy"]], cm.xgb.val[["overall"]][["Kappa"]],
+  'nnet', cm.nnet.val[["overall"]][["Accuracy"]], cm.nnet.val[["overall"]][["Kappa"]],
+  'gbm', cm.gbm.val[["overall"]][["Accuracy"]], cm.gbm.val[["overall"]][["Kappa"]]
+  )
+
+
+Accuracy.val %>% 
+  arrange(desc(Accuracy)) %>% 
+  kable(align = "c", 
+        caption = "Promedio: Accuracy - Kappa"
+        ) %>%
+  kable_paper("hover", full_width = F)
+
+Accuracy.val %>% 
+  ggplot(aes(x = reorder(Modelo, Accuracy), 
+             y = Accuracy, 
+             label = round(Accuracy, 2))) +
+  geom_segment(aes(x = reorder(Modelo, Accuracy),
+                   y = 0,
+                   lwd = 2,
+                   xend = Modelo, 
+                   yend = Accuracy), 
+               color = "darkblue",
+               lwd = 2) +
+  geom_point(size = 8.5, pch = 21, bg = "firebrick", color = "red") +
+  geom_text(color = "white", size = 3) + 
+  scale_y_continuous(limits = c(0, 1)) + 
+  geom_hline(yintercept = 0.79, linetype = "dashed") +
+  annotate(geom = "text", y = 0.84, x = 1.0, label = "Accuracy basal") +
+  labs(title = "Validación Accuracy", 
+       subtitle = "Modelos ordenados por Accuracy", 
+       x = "modelo") + 
+  coord_flip() +
+  theme_bw()
+
+```
+
+En el conjunto de validación el modelo que generó el más alto Accuracy fue el SVM seguido por el RF. El modelo que no mejoró dicha medida fue el Naive Bayes.
+
+```{r message=FALSE}
+result.acc <- metricas %>% 
+  group_by(modelo, metrica) %>% 
+  summarise(media = mean(valor)) %>%
+  spread(key = metrica, value = media) %>%
+  rename(Modelo = modelo,
+         Accuracy.Train = Accuracy) %>% 
+  dplyr::select(-Kappa) %>% 
+  inner_join(Accuracy.val, by = "Modelo") %>% 
+dplyr::select(-Kappa) %>% 
+  rename(Accuracy.Validacion = Accuracy) %>% 
+  arrange(desc(Accuracy.Validacion))
+
+brks <- seq(0.7, 0.99, 0.01)
+clrs <- colorRampPalette(c("white", "#6baed6"))(length(brks) + 1)
+
+datatable(result.acc,
+           escape = FALSE,
+           rownames = FALSE,
+          options = list(autoWidth = FALSE)) %>%
+       formatStyle(c("Accuracy.Validacion"), 
+                   backgroundColor = styleInterval(brks, clrs))
+
+```
+
+```{r}
+result.acc %>%
+  pivot_longer(cols = starts_with('Acc'),
+               names_to ='Tipo',
+               values_to = 'Accuracy'
+               ) %>% 
+  ggplot(aes(x = reorder(Modelo, Accuracy),
+             y = Accuracy, 
+             color = Tipo,
+             label = round(Accuracy, 2))) +
+  geom_point(size = 8) +
+  scale_color_manual(values = c("gray50", "firebrick")) + 
+  geom_text(color = "white", size = 3) +
+  geom_hline(yintercept = 0.79, linetype = "dashed") + 
+  annotate(geom = "text", y = 0.79, x = 1.2, label = "Accuracy basal") +
+  coord_flip() +
+  labs(title = "Accuracy de Entrenamiento y Validación", x = "Modelo") +
+  geom_path(arrow = arrow(length = unit(1.5,'mm'), type = 'closed'), color = 'gray30') +
+  theme_bw() +
+  theme(legend.position = "bottom")
+
+```
+
+Ahora, veamos qué sucedió con la métrica que se eligió para evaluar los modelos: Sensibilidad.
+
+```{r}
+# Sensibilidad
+
+s.nb.val <- round(cm.nb.val[["byClass"]][["Sensitivity"]], digits = 2)
+s.lg.val <- round(cm.lg.val[["byClass"]][["Sensitivity"]], digits = 2)
+s.svm.val <- round(cm.svm.val[["byClass"]][["Sensitivity"]], digits = 2)
+s.rf.val <- round(cm.rf.val[["byClass"]][["Sensitivity"]], digits = 2)
+s.xgb.val <- round(cm.xgb.val[["byClass"]][["Sensitivity"]], digits = 2)
+s.nnet.val <- round(cm.nnet.val[["byClass"]][["Sensitivity"]], digits = 2)
+s.gbm.val <- round(cm.gbm.val[["byClass"]][["Sensitivity"]], digits = 2)
+
+Sensibilidad.val <- tribble(
+  ~Modelo,~Train,~Validacion,
+  'nb', s.nb, s.nb.val,
+  'lg', s.lg, s.lg.val,
+  'svm', s.svm, s.svm.val,
+  'rf', s.rf, s.rf.val,
+  'xgb', s.xgb, s.xgb.val,
+  'nnet', s.nnet, s.nnet.val,
+  'gbm', s.gbm, s.gbm.val
+  )
+
+Sensibilidad.val %>% 
+  arrange(desc(Validacion)) %>% 
+  kable(align = "c", 
+        caption = "Sensibilidad"
+        ) %>%
+  kable_paper("hover", full_width = F)
+
+Sensibilidad.val %>%
+  pivot_longer(cols = ends_with('n'),
+               names_to ='Tipo',
+               values_to = 'Sensibilidad'
+               ) %>%
+  mutate(Modelo = as.factor(Modelo),
+         Modelo = fct_reorder(Modelo, Sensibilidad)) %>% 
+  ggplot(aes(x = Modelo,
+             y = Sensibilidad, 
+             color = Tipo,
+             label = round(Sensibilidad, 2))) +
+  geom_point(size = 8) +
+  scale_color_manual(values = c("gray50", "firebrick")) + 
+  geom_text(color = "white", size = 3) +
+  coord_flip() +
+  labs(title = "Sensibilidad de Entrenamiento y Validación", x = "Modelo") +
+  geom_path(arrow = arrow(length = unit(1.5,'mm'), type = 'closed'), color = 'gray30') +
+  theme_bw() +
+  theme(legend.position = "bottom")
+
+```
+
+La Sensitivity del modelo Naive Bayes en el conjunto de validación fue de: **`r round(cm.nb.val[["byClass"]][["Sensitivity"]], digits = 2)*100`%**
+
+La Sensitivity del modelo de Regresión Logística en el conjunto de validación fue de: **`r round(cm.lg.val[["byClass"]][["Sensitivity"]], digits = 2)*100`%**
+
+La Sensitivity del modelo de Máquina de Vector Soporte en el conjunto de validación fue de: **`r round(cm.svm.val[["byClass"]][["Sensitivity"]], digits = 2)*100`%**
+
+La Sensitivity del modelo Random Forest en el conjunto de validación fue de: **`r round(cm.rf.val[["byClass"]][["Sensitivity"]], digits = 2)*100`%**
+
+La Sensitivity del modelo XGBoost en el conjunto de validación fue de: **`r round(cm.xgb.val[["byClass"]][["Sensitivity"]], digits = 2)*100`%**
+
+La Sensitivity del modelo de Redes Neuronales en el conjunto de validación fue de: **`r round(cm.nnet.val[["byClass"]][["Sensitivity"]], digits = 2)*100`%**
+
+La Sensitivity del modelo Gradient Boosting en el conjunto de validación fue de: **`r round(cm.gbm.val[["byClass"]][["Sensitivity"]], digits = 2)*100`%**
+
+Prácticamente, ningún modelo mejoró la Sensibilidad a excepción de la red neuronal. Por lo tanto, haremos un ensamble con algunos modelos para ver si se obtienen mejores resultados que el mejor modelo: nnet.
+
+<br>
+
+#  <span style="color:rgb(0, 0, 205)">Importancia de las variables</span>
+
+Veamos cuáles son las variables más importantes según el modelo que más alto Recall obtuvo:
+
+```{r}
+varImp(modelo_nnet) %>% plot(main = "Modelo NNET")
+
+```
+
+En la gráfica se observa que el top 3 de las variables que más influyen en dicho modelo son: Age seguida por NumOfProducts que tiene 2 y Geography1.
+
+<br>
+
+#  <span style="color:rgb(0, 0, 205)">Ensamble</span>
+
+<div class=text-justify>
+Ahora, vamos a hacer un ensamble con tres modelos para ver si podemos mejorar los resultados obtenidos por el modelo nnet.
+
+El ensamble consiste en combinar las predicciones de dos o más modelos con el objetivo de superar los resultados obtenidos por el mejor modelo individual. Esta estratégia se recomienda aplicarla cuando hay diferencias entre los distintos modelos generados, ya que la idea es compensar los fallos de unos con los aciertos de otros. Apriori no se esperan mejores resultados, ya que los modelos a ensamblar no presentan diferencias significativas, sin embargo, para fines de mostrar el procedimiento se aplicará esta estratégia.
+</div>
+
+En este caso, como la variable a predecir es categórica se utilizará la moda para el ensamble.
+
+Los modelos a combinar son:
+
+* **SVM**
+* **XGBoost**
+* **RF**
+
+```{r}
+# data frame
+Ensamble <- data.frame(
+  preds.svm,
+  preds.xgb,
+  preds.rf
+)
+
+colnames(Ensamble) <- c("SVM", "XGB", "RF")
+
+moda <- function(x){
+  return(names(which.max(table(x))))
+  }
+
+Ensamble.preds <- Ensamble %>% 
+  mutate(Moda = apply(X = Ensamble, MARGIN = 1, FUN = moda))
+
+Ensamble.preds$Moda <- as.factor(Ensamble.preds$Moda)
+
+```
+
+El Accuracy promedio obtenido del ensamble es de: **`r mean(creditos.validacion.prep$Exited == Ensamble.preds$Moda)`**
+
+```{r message=FALSE}
+cm.ensamble <- confusionMatrix(Ensamble.preds$Moda, 
+                               creditos.validacion.prep$Exited,
+                               positive = "churn")
+
+draw_confusion_matrix(cm.ensamble)
+
+```
+
+Como se esperaba, no hubo mejoras significativas en comparación con el mejor modelo, pues solo se redujeron 7 falsos positivos con el esamble. Sin embargo, no está demás comocer esta técnica.
+
+<br>
+
+#  <span style="color:rgb(0, 0, 205)">Elección del valor de corte adecuado</span>
+
+<div class=text-justify>
+Todos los algoritmos cuando generan las predicciones lo hacen considerando un cutoff o punto de corte del 0.5, es decir, probabilidades mayores a ese nivel las etiquetan como 1 y 0 en otro caso. Sin embargo, este umbral se puede optimizar para tratar de minimizar el tipo de error que se desea reducir. **En este análisis lo que se buscará es minimizar el error tipo II, los falsos negativos.**
+
+Trabajaremos con el modelo nnet, ya que fue uno de los dos modelos que generó la sensibilidad más alta y, además, tuvo poca diferencia entre la sensibilidad de entrenamiento y de validación.
+
+Se vuelve a generar el modelo pero ahora agregando el argumento **classProbs**, para que calcule las probabilidades de ambas clases.
+</div>
+
+```{r eval=FALSE}
+# paralelizacion del proceso
+cores <- detectCores()-1
+cl <- makeCluster(cores, type = "SOCK")
+registerDoSNOW(cl)
+
+# hiperparametros, no. repeticiones y semilla para cada repeticion
+particiones <- 10
+repeticiones <- 5
+
+hiperparametros <- expand.grid(size = c(10, 20, 50, 80, 100, 120), 
+                               decay = c(0.0001, 0.1, 0.5))
+
+set.seed(123)
+
+seeds <- vector(mode = "list", length = (particiones * repeticiones) + 1) 
+
+for (i in 1:(particiones * repeticiones)) {
+  seeds[[i]] <- sample.int(1000, nrow(hiperparametros)) 
+  } 
+
+seeds[[(particiones * repeticiones) + 1]] <- sample.int(1000, 1)
+
+# definicion del entrenamiento
+control.train <- trainControl(method = "repeatedcv", 
+                              number = particiones, 
+                              repeats = repeticiones, 
+                              seeds = seeds, 
+                              returnResamp = "final", 
+                              verboseIter = FALSE,
+                              classProbs = TRUE,
+                              allowParallel = TRUE)
+
+
+# ajuste del modelo
+set.seed(342)
+
+modelo_nnet_probs <- train(Exited ~ ., 
+                      data = creditos.train.prep, 
+                      method = "nnet", 
+                      tuneGrid = hiperparametros,
+                      metric = "Accuracy", 
+                      trControl = control.train,
+                      rang =c(-0.7, 0.7),
+                      MaxNWts = 2000,
+                      trace = FALSE)
+
+# se guarda el modelo
+saveRDS(modelo_nnet_probs, file = "modelo.nnet.probs.rds")
+```
+
+```{r}
+modelo_nnet_probs <- readRDS(file = "Modelos_2/modelo.nnet.probs.rds")
+```
+
+```{r message=FALSE}
+# se genera una copia de los datasets
+c.train <- creditos.train.prep
+c.val <- creditos.validacion.prep
+
+```
+
+```{r}
+# se obtienen las probabilidades
+predict.train <- predict(modelo_nnet_probs, creditos.train.prep, type = "prob")[2]
+predict.val <- predict(modelo_nnet_probs, creditos.validacion.prep, type = "prob")[2]
+
+# juntar las probabilidades
+c.train$prediction <- predict.train$churn
+c.val$prediction <- predict.val$churn
+
+c.train <- as.data.table(c.train)
+c.val <- as.data.table(c.val)
+
+```
+
+<div class=text-justify>
+El objetivo final del modelo es clasificar a los nuevos clientes en una de dos clases: que permanezca o abandone, vamos a querer que el modelo otorgue probabilidades altas a las observaciones positivas (el cliente abandone) y probabilidades bajas a las observaciones negativas (clientes que no abandonen).
+</div>
+
+```{r message=FALSE}
+# gráficas de densidades
+ggplot(c.train, aes(prediction, color = as.factor(Exited))) + 
+geom_density(size = 1) +
+ggtitle("Probabilidades en el Conjunto de Entrenamiento") + 
+scale_color_economist(name = "Clase")
+
+```
+
+<div class=text-justify>
+En la gráfica anterior, se muestan las densidades de ambas clases, las cuales están claramente separadas de manera correcta: la clase negativa a la izquierda (no abandona) y la clase positiva a la derecha (abandona). La división se aprecia bastante clara, porque hay que recordar que se hizo un balanceo de clases.
+
+Cuando la variable a predecir es categórica, los algoritmos de clasificación en el fondo generan probabilidades, las cuales, como se mencionó anteriormente, se basan en un punto de corte para realizar la asignación de clases.
+
+Usaremos una función para recorrer varios puntos de corte y calcular la precisión del modelo tanto en el conjunto de entrenamiento como en el conjunto de validación.
+</div>
+
+```{r}
+c.train$Exited <- ifelse(c.train$Exited == 'churn', '1', '0')
+c.train$Exited <- as.factor(c.train$Exited)
+
+c.val$Exited <- ifelse(c.val$Exited == 'churn', '1', '0')
+c.val$Exited <- as.factor(c.val$Exited)
+
+accuracy_info <- AccuracyCutoffInfo(train = c.train, valid = c.val, 
+                                     predict = "prediction", actual = "Exited")
+
+accuracy_info$plot
+
+```
+
+Se aprecia como en el conjunto de entrenamiento el Accuracy es mayor hasta casi la mitad del punto de corte, ya que a partir de ese nivel el Accuracy en el conjunto de validación lo rebasa. Se identificará cuál es el punto de corte donde la diferencia es menor entre ambos conjuntos:
+
+```{r}
+corte <- function(x){
+  diff(range(x[1], x[2]))
+}
+
+Rangos <- accuracy_info$data
+
+Cortes <- Rangos %>% 
+  mutate(Rango = apply(accuracy_info$data[,-1], MARGIN = 1, FUN = corte))
+
+min(Cortes$Rango)
+which.min(Cortes$Rango)
+
+Cortes[which.min(Cortes$Rango),]
+
+cut.off <- Cortes[which.min(Cortes$Rango),]$cutoff
+
+```
+
+En el punto de corte en `r Cortes[which.min(Cortes$Rango),]$cutoff` es en donde el conjunto de validación supera el Accuracy del conjunto de entrenamiento. A continuación, se muestran los resultados de elegir ese punto de corte.
+
+```{r}
+cm_info <- ConfusionMatrixInfo( data = c.train, predict = "prediction", 
+					 			actual = "Exited", cutoff = cut.off)
+
+cm_info$plot
+
+```
+
+<div class=text-justify>
+La gráfica anterior, muestra las observaciones con ruido para poder distinguirlas más fácilmente. Se muestra la compensación al elegir ese punto de corte.
+
+Si aumentamos el punto de corte, el número de verdaderos negativos (TN) aumenta y el número de verdaderos positivos (TP) disminuye, es decir, si aumentamos el valor del punto de corte, el número de falsos positivos (FP) se reduce, mientras que el número de falsos negativos (FN) aumenta.
+
+Al estar modificando el punto de corte se está equilibrando entre la tasa de falsos positivos y la tasa de falsos negativos y, para tratar de minimizar el número de errores que el modelo está cometiendo, se suelen asignar costos. La curva **ROC** se utiliza para visualizar y cuantificar la compensación que estamos haciendo entre las dos medidas.
+
+Esta curva se crea con la tasa de verdaderos positivos (TPR) y la tasa de falsos positivos (FPR), en varios cortes entre 0 y 1.
+
+Como el objetivo es que tengamos pocos falsos negativos, es decir, pocos errores en los que el modelo predice que un cliente permanece cuando en realidad se fue, se asignará un costo mayor (el doble) con respecto a los falsos positivos.
+</div>
+
+```{r message=FALSE}
+cost_fp <- 50
+cost_fn <- 100
+
+roc_info <- ROCInfo(data = cm_info$data, predict = "predict", 
+                     actual = "actual", cost.fp = cost_fp, cost.fn = cost_fn)
+
+grid.draw(roc_info$plot)
+
+```
+
+<div class=text-justify>
+Al observar las gráficas se puede concluir lo siguiente:
+
+* Al asignar un costo a un falso positivo y a un falso negativo de 50 y 100, respectivamente, el punto de corte óptimo es de 0.33 y el costo total de elegir ese nivel es de 102,500.
+* La curva ROC muestra la compensación entre la tasa a la que puede predecir correctamente algo con la tasa de predicción incorrecta al elegir diferentes puntos de corte. El área bajo la curva ROC (AUC) es de 0.867, cuanto más alto es este resultado mejor será el modelo.
+* El gráfico de costos calcula el costo asociado al elegir diferentes puntos de corte.
+* Para ambas gráficas, la línea punteada indica dónde se encuentra ese punto de corte óptimo, para la gráfica de costos, muestra el valor de corte óptimo. En cuanto a la gráfica de la curva ROC, esta indica la ubicación de la tasa de falsos positivos (FPR) y la tasa de verdaderos positivos (TPR) correspondientes al valor de corte óptimo. El color en las curvas denota el costo asociado con ese punto, "más verde" significa que el costo es menor, mientras que "más negro" significa lo contrario.
+
+Volvemos a generar la matriz de confusión como gráfico de dispersión con el punto de corte óptimo para ver los resultados obtenidos.
+</div>
+
+```{r}
+cm_info <- ConfusionMatrixInfo( data = c.train, predict = "prediction", 
+					 			actual = "Exited", cutoff = roc_info$cutoff)
+
+cm_info$plot
+
+```
+
+El gráfico de la matriz de confusión muestra claramente que al cambiar el valor de corte a 0.33 el modelo de clasificación está cometiendo menos error falso negativo (FN), ya que el costo asociado con él es 2 veces mayor que un falso positivo (FP).
+
+Ahora, veamos la curva ROC
+
+```{r message=FALSE}
+pred <- prediction(c.train$prediction, c.train$Exited)
+perf <- performance(pred, "tpr", "fpr")
+
+plot(perf, colorize = TRUE, main = "Curva ROC", xlab = "Tasa de falsos positivos",
+     ylab = "Tasa de verdaderos positivos")
+abline(a = 0, b = 1, col = "blue", lty = 2)
+grid()
+auc <- as.numeric(performance(pred,"auc")@y.values)
+legend("bottomright", legend = paste(" AUC =", round(auc,4)))
+
+```
+
+Podemos, también, generar los resultados para cada punto de corte:
+
+```{r}
+cutoffs <- data.frame(cut = perf@alpha.values[[1]], fpr = perf@x.values[[1]], 
+                      tpr = perf@y.values[[1]])
+head(cutoffs)
+
+
+cutoffs <- cutoffs[order(cutoffs$tpr, decreasing = TRUE),]
+head(subset(cutoffs, fpr < 0.33))
+
+```
+
+<br>
+
+#  <span style="color:rgb(0, 0, 205)">Evaluación final: datos de test</span>
+
+Finalmente, vamos a revisar el conjunto de test para conocer los resultados con el punto de corte óptimo.
+
+```{r message=FALSE}
+predict.test <- predict(modelo_nnet_probs, creditos.test.prep, type = "prob")[2] %>% 
+  as.data.frame()
+
+creditos.test.prep$predict <- predict.test$churn
+
+test.final <- creditos.test.prep %>% 
+  mutate(prediccion = if_else(predict >= roc_info$cutoff, "churn", "stay"))
+
+test.final$prediccion <- as.factor(test.final$prediccion)
+
+cm.final <- confusionMatrix(test.final$prediccion, creditos.test.prep$Exited, positive = "churn")
+
+draw_confusion_matrix(cm.final)
+
+```
+
+<div class=text-justify>
+Después de generar las probabilidades y de considerar el punto de corte óptimo resultado de aplicarle costos a los errores, se obtuvo una **Sensibilidad de `r cm.final[["byClass"]][["Sensitivity"]]`**, además, solo se obtuvieron **`r cm.final[["table"]][1,2]` falsos negativos**, es decir, clientes que el modelo predijo que no se iban a ir del banco y en realidad se fueron. Se logró minimizar este dato, sin embargo, fue acosta de aumentar los falsos positivos, ya que éstos aumentaron, pero es preferible para este caso.
+</div>
+
+<br>
+
+#  <span style="color:rgb(0, 0, 205)">Identificando el tiempo de abandono del cliente</span>
+
+<div class=text-justify>
+Ya para terminar con el presente proyecto, vamos a identificar el tiempo en el que los clientes abandonan el banco, situación que es de suma importancia para tratar de detectar el momento en el que podemos implementar estrategias para evitar su abandono.
+
+Aplicaremos un **análisis de supervivencia**, ya que es un conjunto de métodos estadísticos utilizados para conocer el tiempo que tarda en ocurrir un evento que, en este caso, será el abandono de clientes.
+
+Para esto vamos a utilizar la copia de la base original que se generó al inicio del análisis, ya que hay que recordar que la base que se ha estado trabajado ha sufrido modificaciones y eliminaciones de variables no significativas para los algoritmos utilizados.
+</div>
+
+```{r}
+creditos.raw$status <- ifelse(creditos.raw$Exited == 1,"Churns","Stays")
+creditos.raw$status <- as.factor(creditos.raw$status)
+
+```
+
+Veamos en una tabla las variables de interés: **Tenure** y **Exited**, con el propósto de identificar las distribuciones:
+
+```{r}
+tab_xtab(creditos.raw$Tenure, creditos.raw$status, margin = "row", bar.pos = "stack",
+show.summary = F)
+
+```
+
+<br>
+
+Para facilitar la identificación de las distribuciones entre los clientes que abandonaron el banco y los que aún permanecen, se hará una gráfica de barras apiladas con sus respectivas proporciones en porcentajes y en nivel:
+
+```{r}
+plot_xtab(creditos.raw$Tenure, creditos.raw$status, margin = "row", bar.pos = "stack",
+show.summary = F, coord.flip = T,
+axis.titles = "", legend.title = "Status",
+geom.colors = c("#f3c6f3","lightblue")) +
+  theme_minimal() +
+          theme(text = element_text(size = 12), 
+          plot.title = element_text(hjust = 0.5), title = element_text(size = 12)) +
+  labs(title = "Proporciones de Abandono por Tiempo de Permanencia",
+       x = "Permanencia (años)", 
+       y = "Porcentaje %")
+
+```
+
+<div class=text-justify>
+En la gráfica anterior, se aprecia claramente cómo es en los dos primeros años donde el porcentaje de abandono es ligeramente mayor con respecto al resto del periodo. Además, se puede identificar que no se aprecia una tendencia definida con el paso del tiempo.
+</div>
+
+<span style="color:rgb(204, 153, 0)">Estimación del tiempo de supervivencia o permanencia en el banco</span>
+
+```{r}
+fitsv <- survfit(Surv(creditos.raw$Tenure, creditos.raw$Exited) ~ 1, 
+                 type = "kaplan-meier")
+fitsv
+
+```
+
+<div class=text-justify>
+A partir de la salida anterior, se puede ver que de los 10,000 clientes analizados, fueron 2,037 los que abandonaron el banco durante el periodo. La mediana del tiempo de supervivencia es de 10 años, lo que significa que alrededor del 50% de los clientes no abandonan antes de alcanzar una duración de permanencia de 10 años.
+</div>
+
+Veamos lo que sucede por género:
+
+```{r}
+fitsv1 <- survfit(Surv(Tenure, Exited) ~ Gender, data = creditos.raw)
+fitsv1
+
+```
+
+El resumen anterior muestra que para el grupo de las mujeres el 25% no abandonó el banco hasta los 10 años, aproximadamente. Para el grupo de los hombres la mediana de supervivencia fue mayor (por eso aparece NA).
+
+```{r}
+ggsurvplot(fitsv1,
+           pval = TRUE, conf.int = TRUE,
+           risk.table.col = "strata",
+           linetype = "strata",
+           ggtheme = theme_bw(),
+           palette = c("#E7B800", "#2E9FDF"))
+
+```
+
+<div class=text-justify>
+En la gráfica anterior, se aprecia claramente como la probabilidad de supervivencia es mayor para los hombres respecto al grupo de las mujeres. Por ejemplo, en el tiempo 5, la probabilidad para los hombres es de 0.882, mientras que para las mujeres es de 0.8211, aproximadamente. El p-value al ser menor al 0.05 nos indica que hay diferencias significativas entre ambos grupos. Lo anterior, también se confirma con la prueba Log-Rank, que compara curvas de supervivencia y cuya hipótesis nula es que no hay diferencia en la supervivencia entre los grupos:
+</div>
+
+```{r}
+survdiff(Surv(Tenure, Exited) ~ Gender, data = creditos.raw)
+
+```
+
+```{r}
+res <- data.frame(time = fitsv1$time,
+                n.risk = fitsv1$n.risk,
+                n.event = fitsv1$n.event,
+                n.censor = fitsv1$n.censor,
+                surv = fitsv1$surv,
+                upper = fitsv1$upper,
+                lower = fitsv1$lower
+)
+
+res %>% 
+  filter(time == 5)
+
+```
+
+Estimación del tiempo de supervivencia por País
+
+```{r}
+fitsv2 <- survfit(Surv(Tenure, Exited) ~ Geography, 
+                    data = creditos.raw)
+fitsv2
+
+```
+
+```{r}
+ggsurvplot(fitsv2,
+           pval = TRUE, conf.int = TRUE,
+           risk.table.col = "strata",
+           linetype = "strata",
+           surv.median.line = "hv",
+           ggtheme = theme_bw(),
+           palette = c("#E7B800", "#2E9FDF", "darkred"))
+
+```
+
+En la supervivencia por grupo geográfico, casi la tercera parte de los clientes de Alemania no abandonan hasta los 9 años de duración. Sin embargo, los clientes de Francia y España tienen una mediana de supervivencia superior a los 10 años (por eso hay NA).
+
+Su respectiva gráfica muestra cómo los alemanes tienen probabilidades más bajas con respecto a los clientes de los otros dos países. Aquí tambien existen diferencias significativas.
+
+```{r}
+survdiff(Surv(Tenure, Exited) ~ Geography, data = creditos.raw)
+
+```
+
+Estimación del tiempo de supervivencia por tipo de miembro del sistema bancario
+
+```{r}
+fitsv3 <- survfit(Surv(Tenure, Exited) ~ IsActiveMember, 
+                    data = creditos.raw)
+fitsv3
+
+```
+
+De manera similar, se puede observar que entre los clientes que no son miembros activos del sistema bancario, el tiempo medio de supervivencia es de 10 años, mientras que para los que son miembros activos, el tiempo medio de supervivencia es superior a 10.
+
+```{r}
+ggsurvplot(fitsv3,
+           pval = TRUE, conf.int = TRUE,
+           risk.table.col = "strata",
+           linetype = "strata",
+           ggtheme = theme_bw(),
+           palette = c("#E7B800", "#2E9FDF"))
+
+```
+
+Muestra la misma tendencia que el análisis por género y, también, hay diferencias significativas entre estar activo o no dentro del sistema bancario.
+
+```{r}
+survdiff(Surv(Tenure, Exited) ~ IsActiveMember, data = creditos.raw)
+```
+
+<br>
+
+Vamos a predecir algunas probabilidades de supervivencia:
+
+* Hombre en el periodo 7:
+
+```{r}
+time1 <- 7
+
+# Supervivencia
+predictSurvProb(fitsv1, newdata = data.frame(Gender = "Male"), time = time1)
+
+# No Supervivencia
+1-predictSurvProb(fitsv1, newdata = data.frame(Gender = "Male"), time = time1)
+
+```
+
+<br>
+
+* Mujer en el periodo 7:
+
+```{r}
+time1 <- 7
+
+# Supervivencia
+predictSurvProb(fitsv1, newdata = data.frame(Gender = "Female"), time = time1)
+
+# No Supervivencia
+1-predictSurvProb(fitsv1, newdata = data.frame(Gender = "Female"), time = time1)
+
+```
+
+<br>
+
+* Hombre de Alemania en el periodo 8:
+
+```{r}
+time1 <- 8
+
+# Supervivencia
+predictSurvProb(fitsv1, newdata = data.frame(Gender = "Male",
+                                             Geography = "Germany"), time = time1)
+
+# No Supervivencia
+1-predictSurvProb(fitsv1, newdata = data.frame(Gender = "Male",
+                                             Geography = "Germany"), time = time1)
+
+
+```
+
+<br>
+
+#  <span style="color:rgb(0, 0, 205)">Conclusiones</span>
+
+<div class=text-justify>
+
+Se pudo comprobar que para predecir el abandono de clientes el modelo que mejores resultados obtuvo fue la red neuronal, sin embargo, al hacer el ensamble con los modelos SVM, XGB y RF se obtuvo una mejora marginal, pero siguiendo el principio de parsimonia (simplicidad) se trabajo con el modelo NNET.
+
+Se logró reducir los falsos negativos pero a costa de aumentar los falsos positivos. Lo anterior, fue resultado del objetivo buscado: reducir el error tipo II (pronosticar a un cliente en la clase de los que no se van a ir y al final terminan abandonando el banco).
+
+En cuanto a las variables más importantes de abandono, según el modelo NNET, se pueden nombrar los siguientes: edad, número de productos, país de residencia, actividad como usuario del sistema bancario, balance o saldo y género.
+
+Hablando sobre el tiempo de permanencia, alrededor del 50% de los clientes presumiblemente no van a abandonar dentro de los 10 años. Aún así, si se toman en consideración las covariables, ser ciudadano alemán aumenta la probabilidad de abandono, lo que reduce el tiempo de supervivencia a solo 9 años. Sin embargo, ser ciudadano de otro país y/o ser miembro activo del sistema bancario disminuye la probabilidad de abandono, lo que genera más de 10 años en los que no se espera que los clientes se vayan.
+
+Por tanto, habría que trabajar en conjunto con el área de Marketing para enfocar estratégias y campañas de fidelización en las mujeres alemanas que no son miembros activos del sistema bancario.
+
+</div>
+
+

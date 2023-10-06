@@ -1,0 +1,544 @@
+---
+title: "Analisis de Tweets Usuarios Citibanamex"
+subtitle: "Proyecto: Procesamiento del Lenguaje Natural"
+author: "Alejandro Rojas Moreno"
+date: "4/1/2022"
+output:
+  html_document:
+    code_folding: show
+    code_download: true
+    df_print: paged
+    theme: spacelab
+    toc: true
+    toc_float: true
+editor_options:
+  chunk_output_type: console
+---
+
+<br>
+
+# <span style="color:rgb(0, 0, 205)">Presentación</span>
+
+<div class=text-justify>
+En el presente proyecto se analizarán algunos comentarios hechos a través de la red social **Twitter** por los usuarios de la banca en México, específicamente, los clientes de **Citibanamex**, en el periodo comprendido del 21 al 30 de diciembre de 2021. Lo anteior, debido a que dicha red social solo permite que se extraigan datos de los últimos 6-9 días. Se extrajeron tweets de la cuenta @ContactoCitibmx, que es uno de los canales de atención a clientes que tiene dicha entidad financiera para interactuar con sus clientes.
+
+Este análisis es de minería de texto, por lo que, la mayoría del trabajo mostrará técnicas estadísticas descriptivas y exploratorias.
+
+Los datos se pueden extraer directamente desde twitter, sin embargo, por comodidad y para seguir el presete trabajo, también, se encuentran en mi repositorio de [github](https://github.com/arojasmor/Quejasbnmx) junto con el código de esta publicación.
+</div>
+
+<br>
+
+# <span style="color:rgb(0, 0, 205)">Contenido</span>
+
+* Presentación
+* Contenido
+* Set up
+* Extracción de la información
+* Tokenizacion y limpieza de texto
+* Análisis exploratorio
+   + Distribución temporal de los tweets
+   + Frecuencia de palabras
+   + Nube de palabras
+* Relación entre palabras
+* Análisis de sentimientos
+* Conclusiones
+
+<br>
+
+# <span style="color:rgb(0, 0, 205)">Set up</span>
+
+Iniciamos configurando las opciones generales que vamos a requerir para el desarrollo de este proyecto.
+
+```{r setup, message=FALSE, comment="", warning=FALSE, results='hide'}
+knitr::opts_chunk$set(echo = TRUE,
+                      warning = FALSE,
+                      message = FALSE,
+                      fig.align = "center"
+                      )
+
+paquetes <- c("rtweet", "tidyverse", "lubridate", "wordcloud", "RColorBrewer", "tidytext", "igraph", "ggraph", "knitr", "DT", "kableExtra", "tm", "reshape2")
+
+instalados <- paquetes %in% installed.packages()
+
+if(sum(instalados == FALSE) > 0) {
+  install.packages(paquetes[!instalados])
+}
+
+lapply(paquetes, require, character.only = TRUE)
+```
+
+&nbsp;
+
+# <span style="color:rgb(0, 0, 205)">Extracción de de información</span>
+
+La información de los tweets se pueden descargar directamente con apoyo de la función **search_tweets** contenida en el paquete **rtweet**:
+
+```{r eval=FALSE}
+# se extraen los tweets
+ds <- Map(
+  "search_tweets",
+  q = "@Citibanamex OR Banamex OR Citibanamex OR banamex OR @banamex",
+  n = 5000,
+  parse = TRUE,
+  include_rts = FALSE,
+  lang = "es"
+)
+
+# unir los datos
+ds <- do_call_rbind(ds)
+
+# se seleccionan columnas
+ds <- ds %>% 
+  select("screen_name", 
+         "created_at", 
+         "status_id", 
+         "text",
+         "user_id",
+         "verified",
+         "location")
+
+# se guarda el archivo
+write_csv(ds, "tweets.csv")
+```
+
+```{r}
+# se cargan los datos previamente guardados
+tweets <- read_csv("tweets.csv")
+
+# se quitan las respuestas de la institución, ya que nos interesan solo los comentarios
+# de los clientes
+tweets <- tweets %>% 
+  filter(screen_name !="Citibanamex" & screen_name !="ContactoCitibmx") %>% 
+  select(c(created_at, text))
+
+```
+
+Se muestra un fragmento de los tweets extraidos:
+
+```{r}
+DT::datatable(head(tweets, 20),
+              rownames = FALSE,
+              options = list(
+                pageLength = 5,
+                scrollX = TRUE))
+
+```
+
+&nbsp;
+
+# <span style="color:rgb(0, 0, 205)">Tokenizacion y limpieza de texto</span>
+
+En este proyecto, el proceso de limpieza consiste en eliminar del texto todas aquellas palabras, signos, números, abreviaturas, etc., que no aportan información importante.
+
+Además, para poder seguir adelante es necesario tener la información de los comentarios (columna text), en palabras individuales para poder obtener, entre otras cosas sus frecuencias para saber cuáles son las más mencionadas por los usuarios.
+
+```{r message=FALSE}
+source("limpieza.R")
+
+tweets.tkns <- tweets %>% 
+  mutate(texto_tokenizado = map(.x = text,
+                                .f = limpiar_tokenizar))
+
+tweets.tkns %>% 
+  slice(1) %>% 
+  select(texto_tokenizado) %>%
+  pull()
+
+tweets.tkns <- tweets.tkns %>% 
+  select(-text) %>%
+  unnest()
+
+tweets.tkns <- tweets.tkns %>% 
+  rename(token = texto_tokenizado)
+
+tweets.tkns %>% 
+  head(10) %>% 
+  kbl( 
+      align = "c",
+      caption = "Tokenización",
+      ) %>%
+  kable_paper("hover", full_width = F)
+
+```
+
+Como los comentarios están en el idioma Español, se utilizará el paquete **tm** para trabajar con las llamadas stopwords, que son palabras que no aportan valor al análisis como los artículos, conectores, etc.
+
+```{r message=FALSE}
+custom_stop_words <- bind_rows(
+                               tibble(word = tm::stopwords("spanish"),
+                                          lexicon = "custom"))
+tweets.tkns <- tweets.tkns %>% 
+  rename(word = token,
+         fecha = created_at)
+
+tweets.tkns <- anti_join(x = tweets.tkns,
+                    y = custom_stop_words,
+                    by = "word")
+
+tweets.tkns %>% 
+  head(10) %>% 
+  kbl( 
+      align = "c",
+      caption = "Tokenización",
+      ) %>%
+  kable_paper("hover", full_width = F)
+
+```
+
+El resultado de la limpieza y tokenización es un marco de datos de 32,211 filas y 2 columnas:
+
+```{r}
+dim(tweets.tkns)
+```
+
+&nbsp;
+
+# <span style="color:rgb(0, 0, 205)">Análisis exploratorio</span>
+
+A continuación, se crearán algunas gráficas que faciliten el análisis exploratorio tanto del comportamiento de los usuarios como del contenido de sus comentarios. Lo anterior, nos dará una primer idea de lo que transmitieron en sus tweets.
+
+## <span style="color:rgb(0, 0, 205)">Distribución temporal de los tweets</span>
+
+Veamos la distribución de los tweets para ver su evolución en el tiempo durante los 9 días de actividad con la que contamos
+
+```{r}
+tweets.tkns %>% 
+  ggplot(aes(x = as.Date(fecha))) +
+  geom_histogram(position = "identity", 
+                 bins = 20, 
+                 show.legend = FALSE, 
+                 fill = "steelblue",
+                 color = "firebrick") +
+  scale_y_continuous(labels = scales::comma) +
+  scale_x_date(date_labels = "%d-%m-%Y", date_breaks = "1 day") +
+  theme(axis.text.x = element_text(angle = 90, size = 8)) +
+  labs(title = "Distribución Tweets por Día", x = "fecha de publicación", y = "número de tweets") 
+
+```
+
+En esta primer gráfica se aprecia que los últimos cuatro días del año 2021 hubo una mayor actividad de los usuarios, siendo el día 28 el de mayor cantidad de mensajes.
+
+```{r}
+tweets.tkns %>% 
+  ggplot(aes(x = as.POSIXct(fecha))) +
+  geom_histogram(position = "identity", 
+                 bins = 20, 
+                 show.legend = FALSE, 
+                 fill = "steelblue",
+                 color = "firebrick") +
+  scale_y_continuous(labels = scales::comma) +
+  scale_x_datetime(date_labels = "%d-%m-%Y %H", date_breaks = "6 hours") +
+   theme(axis.text.x = element_text(angle = 90, size = 8)) +
+  labs(title = "Distribución Tweets: cada seis horas",
+       x = "fecha de publicación",
+       y = "número de tweets") 
+
+```
+
+<div class=text-justify>
+En esta segunda gráfica se muestra la actividad de los usuarios cada seis horas. En ella se observa que en la segunda parte del rango de días analizado la actividad es menor solo que en los últimos 4 días después de las 18:00 horas la actividad crece bastante.
+</div>
+
+&nbsp;
+
+## <span style="color:rgb(0, 0, 205)">Frecuencia de palabras</span>
+
+Veamos cuáles son las palabras más utilizadas por los usuarios en sus tweets.
+
+```{r}
+count(tweets.tkns,
+      word,
+      sort = TRUE) %>% 
+  head(10) %>% 
+  kbl( 
+      align = "c",
+      caption = "Tokenización",
+      ) %>%
+  kable_styling("hover", full_width = F)
+
+```
+
+```{r}
+tweets.tkns %>% 
+  count(word) %>% 
+  top_n(10, n) %>%
+  arrange(desc(n)) %>% 
+  ggplot(aes(x = reorder(word, n), y = n)) + 
+  geom_col(fill = "steelblue", color = "firebrick") + 
+  theme_bw() + 
+  labs(y = "", x = "") + 
+  theme(legend.position = "none") +
+  scale_y_continuous(labels = scales::comma) +
+  coord_flip() +
+  labs(title = "Top 10: Palabras más frecuentes", 
+       y = "Frecuencia")
+
+```
+
+<div class=text-justify>
+No es de extrañar que las palabras más frecuentes tengan que ver con el nombre de la institución bancaria a la que pertenecen los usuarios cuyos tweets descargamos. También, por las demás palabras parece ser que los comentarios de los usuarios tienen que ver con señalamientos referentes a tarjetas, cuentas, banco, sucursal, etc.
+</div>
+
+&nbsp;
+
+## <span style="color:rgb(0, 0, 205)">Nube de palabras</span>
+
+Otra forma de ver las palabras más frecuentes y más utilizada en temas de análisis de texto es la Word Cloud o nube de palabras, la cual es una representación gráfica de la frecuencia y cuyas palabras más importantes (repetidas) tienen mayor tamaño.
+
+```{r message=FALSE}
+count(tweets.tkns, word) %>%
+  with(wordcloud(words = word,
+                 freq = n,
+                 max.words = 400,
+                 scale = c(3,1),
+                 rot.per = 0.3,
+                 random.order = FALSE,
+                 colors = brewer.pal(6, "Dark2")))
+
+```
+
+&nbsp;
+
+# <span style="color:rgb(0, 0, 205)">Relación entre palabras</span>
+
+Se han hecho descripciones del texto considerando palabras de forma individual que nos han mostrado las más utilizadas por los usuarios, sin embargo, para hacer una descripción un poco más completa y realista es conveniente analizar las palabras en forma conjunta. Lo siguiente que se hará es calcular y visualizar las relaciones entre dos palabras (bigramas).
+
+```{r}
+bigramas <- tweets %>% 
+  mutate(texto = limpiar(text)) %>%
+           select(text) %>%
+           unnest_tokens(input = text, 
+                         output = "bigrama",
+                         token = "ngrams",
+                         n = 2, 
+                         drop = TRUE)
+
+bigramas  %>% 
+  count(bigrama, sort = TRUE) %>% 
+  head(10) %>% 
+  kbl( 
+      align = "c",
+      caption = "Tokenización",
+      ) %>%
+  kable_styling("hover", full_width = F)
+
+```
+
+Se quitan manualmente algunas palabras que no aportan valor al análisis:
+
+```{r}
+bigramas <- filter(bigramas, 
+                   bigrama!="https t.co")
+
+```
+
+En el resumen anterior, se aprecia que los bigramas más frecuentes están formados por stopwords, por lo que, se eliminarán por no aportar valor al análisis.
+
+```{r}
+bigramas_separados <- bigramas %>% 
+  separate(bigrama, c("palabra1", "palabra2"), sep = " ")
+
+head(bigramas_separados)
+
+# Filtrado de los bigramas que contienen alguna stopword
+bigramas_separados <- bigramas_separados  %>%
+  filter(!palabra1 %in% custom_stop_words$word) %>%
+  filter(!palabra2 %in% custom_stop_words$word)
+
+# Unión de las palabras para formar de nuevo los bigramas
+bigramas <- bigramas_separados %>%
+            unite(bigrama, palabra1, palabra2, sep = " ")
+
+bigramas %>% 
+  count(bigrama, sort = TRUE) %>%
+  head(20) %>% 
+  kbl( 
+      align = "c",
+      caption = "Tokenización",
+      ) %>%
+  kable_styling("hover", full_width = F)
+
+```
+
+Una forma más visual e informativa de analizar las relaciones entre las palabras es mediante el uso de redes.
+
+```{r}
+graph <- bigramas %>%
+         separate(bigrama, c("palabra1", "palabra2"), sep = " ") %>% 
+         count(palabra1, palabra2, sort = TRUE) %>%
+         filter(n > 18) %>%
+  graph_from_data_frame(directed = FALSE)
+
+set.seed(123)
+
+plot(graph, vertex.label.font = 3,
+     vertex.label.color = "black",
+     vertex.label.cex = 0.9, edge.color = "gray85")
+
+```
+
+Podemos apreciar que dentro del top 10 de los bigramas están:
+
+* **tarjeta citibanamex**
+* **banco azteca**
+* **pésimo servicio**
+
+Probablemente, las quejas tienen que ver con alguna tarjeta de crédito, con la atención al público tanto en sucursal, vía telefónica y online.
+
+&nbsp;
+
+# <span style="color:rgb(0, 0, 205)">Análisis de sentimientos</span>
+
+<div class=text-justify>
+En esta última parte del trabajo se hará el análisis de sentimientos, es decir, se clasificarán las palabras contenidas en los tweets en una de las siguientes dos categorías: positiva o negativa, además, utilizando el lexicon **nrc** se podrán también clasificar las palabras en los siguientes sentimientos: confianza, ira, disgusto, asombro, alegría, miedo, tristeza y premonición.
+
+El archivo de sentimientos se puede descargar del repositorio [github](https://github.com/7PartidasDigital/AnaText/tree/master/datos/diccionarios) del proyecto **7PartidasDigital** elaborado por la Universidad de Valladolid.
+</div>
+
+```{r message=FALSE}
+source("get_sentiments.R")
+sentimientos <- readRDS(file = "sentimientos.rds")
+
+tweets.tkns <- tweets.tkns %>% 
+  rename(palabra = word)
+
+```
+
+Veamos la cantidad de palabras clasificadas como positivas y negativas de todos los tweets
+
+```{r message=FALSE}
+tweets.tkns %>%
+  right_join(get_sentiments("nrc")) %>%
+  filter(!is.na(sentimiento) & sentimiento == "positivo" | sentimiento == "negativo") %>%
+  count(sentimiento, sort = TRUE) %>% 
+  kable( 
+      format = "html",
+      digits = 0,
+      caption = "Sentimientos Positivos - Negativos",
+      format.args = list(big.mark = ","),
+      table.attr = "style='width:50%;'") %>%
+  kable_styling(bootstrap_options = c("striped", "hover"))
+
+```
+
+```{r message=FALSE}
+tweets.tkns %>%
+  right_join(get_sentiments("nrc")) %>%
+  filter(!is.na(sentimiento)& sentimiento == "positivo" | sentimiento == "negativo") %>% 
+  count(palabra, sentimiento, sort = TRUE) %>%
+  acast(palabra ~ sentimiento, value.var = "n", fill = 0) %>%
+  comparison.cloud(colors = c("red","blue"), 
+                   max.words = 300,
+                   title.size = 2)
+
+```
+
+En el cuadro anterior, se aprecia que se detectó casi la misma cantidad de palabras negativas que positivas. Ahora, se muestra el detalle (top 15) de las palabras en cada categoría.
+
+```{r message=FALSE}
+tweets.tkns %>%
+  right_join(get_sentiments("nrc")) %>%
+  filter(!is.na(sentimiento)& sentimiento == "positivo" | sentimiento == "negativo") %>% 
+  count(palabra, sentimiento, short = TRUE) %>% 
+  group_by(sentimiento) %>% 
+  top_n(15) %>% 
+  ungroup() %>% 
+  mutate(palabra = reorder(palabra, n)) %>% 
+  ggplot(aes(palabra, n, fill = sentimiento)) +
+  geom_col(show.legend = FALSE) +
+  scale_fill_manual(values = c("darkred", "steelblue")) +
+  geom_text(aes(label = n), hjust = 1.2, color = "white") +
+  facet_wrap(~sentimiento, scales = "free_y") +
+  coord_flip() +
+  xlab(NULL) +
+  labs(title = "Detalle de Sentimientos")
+
+```
+
+En las gráficas anteriores, se aprecian las palabras que los usuarios capturaron en sus tweets y que el algoritmo los clasificó como negativos o positivos. Las palabras negativas parece que tienen más que ver con reclamos y quejas de los usuarios como robo, mal, peor, cancelar, problema, entre otras.
+
+Ahora, veamos el conteo de los demás sentimientos para darnos una idea del ánimo de los usuarios cuando escribieron sus tweets.
+
+```{r message=FALSE}
+tweets.tkns %>%
+  right_join(get_sentiments("nrc")) %>%
+  filter(!is.na(sentimiento)) %>%
+  count(sentimiento, sort = TRUE) %>% 
+  kable( 
+      format = "html",
+      digits = 0,
+      caption = "Resumen de Sentimientos",
+      format.args = list(big.mark = ","),
+      table.attr = "style='width:50%;'") %>%
+  kable_styling(bootstrap_options = c("striped", "hover"))
+
+```
+
+Gráficamente:
+
+```{r message=FALSE}
+tweets.tkns %>%
+  right_join(get_sentiments("nrc")) %>%
+  filter(!is.na(sentimiento)) %>%
+  group_by(sentimiento) %>%
+  count(sentimiento, sort = TRUE) %>% 
+  mutate(sentimiento = reorder(factor(sentimiento), n)) %>%
+  ggplot(aes(reorder(sentimiento,n), n, fill = sentimiento)) +
+  geom_col(show.legend = FALSE) +
+  geom_text(aes(label = format(n, big.mark = ",")), hjust = 1.2, color = "black") +
+  coord_flip() +
+  xlab(NULL) +
+  labs(title = "Detalle de Emociones")
+
+```
+
+Bajando más el análisis para conocer las palabras contenidas en cada emoción:
+
+```{r message=FALSE}
+tweets.tkns %>%
+  right_join(get_sentiments("nrc")) %>%
+  filter(!is.na(sentimiento)) %>% 
+  count(palabra, sentimiento, short = TRUE) %>% 
+  group_by(sentimiento) %>% 
+  top_n(15) %>% 
+  ungroup() %>% 
+  mutate(palabra = reorder(palabra, n)) %>% 
+  ggplot(aes(palabra, n, fill = sentimiento)) +
+  geom_col(show.legend = FALSE) +
+  geom_text(aes(label = n), hjust = 1.2, color = "white") +
+  facet_wrap(~sentimiento, scales = "free_y") +
+  coord_flip() +
+  xlab(NULL) +
+  labs(title = "Detalle de Emociones")
+```
+
+Hay algunas palabras que se clasifican en más de una emoción como, por ejemplo, dinero que se encuentra en las categorías de alegría, asombro e ira. Lo anterior, porque depende mucho del contexto de la palabra.
+
+```{r message=FALSE}
+tweets.tkns %>%
+  right_join(get_sentiments("nrc")) %>%
+  count(palabra, sentimiento, sort = TRUE) %>% 
+  filter(!is.na(sentimiento), sentimiento != "positivo", sentimiento != "negativo") %>%
+  acast(palabra ~ sentimiento, value.var = "n", fill = 0) %>%
+  comparison.cloud(title.size = 1.5)
+
+```
+
+# <span style="color:rgb(0, 0, 205)">Conclusiones</span>
+
+<div class=text-justify>
+Después de haber realizado este pequeño análisis podemos concluir que los usuarios de la institución bancaria en cuestión se suelen quejar por temas relacionados con errores en algunas aplicaciones, se sinten robados, pésimo o mal servicio, cancelaciones y con algunos otros problemas que han tenido como clientes.
+
+El resultado de hacer un análisis de emociones nos indica que la mayoría de los usuarios que comentaron en su cuenta de twitter tenían emociones negativas como miedo, tristeza, ira y disgusto. Lo anterior, porque fueron las emociones con mayor frecuencia, sin embargo, al clasificar todas las palabras en positivas y negativas la proporción es casi la misma.
+
+Hay que aclarar que depende del lexicon o diccionario utilizado los resultados serán distintos.
+
+Con este corto trabajo podemos darnos una idea de lo que el equipo de atención a clientes del banco podría hacer para disminuir los reclamos o quejas como, por ejemplo, realizar encuestas a los clientes que van directamente a sucursal y enviar encuestas vía correo electrónico después de usar algún cajero automático o directamente en su página web. Actualmente, hay empresas que se dedican a proporcionar ese servicio y ya solo le entregan los resultados al cliente, el cual con su equipo o área de analítica se encarga de procesar dicha información para la toma de decisiones.
+
+</div>
+
+
+
+
+

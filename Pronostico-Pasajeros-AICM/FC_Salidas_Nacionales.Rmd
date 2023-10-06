@@ -1,0 +1,1781 @@
+---
+title: "Pronóstico de Clientes en el Aeropuerto Internacional de la Ciudad de México"
+subtitle: "Proyecto: Pronóstico de una Serie de Tiempo"
+author: "Alejandro Rojas Moreno"
+date: "6/10/2021"
+output:
+  html_document:
+    code_folding: show
+    code_download: true
+    df_print: paged
+    theme: spacelab
+    toc: true
+    toc_float: false
+editor_options:
+  chunk_output_type: console
+---
+
+&nbsp;
+
+# <span style="color:rgb(0, 0, 205)">Presentación</span>
+&nbsp;
+
+<div class=text-justify>
+En este trabajo se desarrollará un proyecto de analítica relacionado con el modelado de una serie de tiempo. Este tipo de proyectos es muy común en prácticamente todas las empresas, pues en su Plan de Negocios anual, es donde se especifican los objetivos y los escenarios tanto operativos como financieros y éstos se construyen a partir de pronósticos.
+
+El trabajo consistirá en pronosticar la cantidad mensual de clientes, para el año 2019, del Aeropuerto Internacional de la Ciudad de México (AICM), en otras palabras, se hará una predicción de los pasajeros que abordaron vuelos nacionales más vuelos internacionales, pero solo las salidas. El rango histórico de datos abarca desde el año 2008 a 2019 y aunque se dispone de información más actual, por cuestiones relacionadas con la pandemia de Coivd-19, se decidió hacer el ponóstico solo para 2019, ya que esto permitirá medir la precisión del modelo sin el impacto de dicha pandemia. Posteriormente, ya con el modelo final, se hará la predicción para los meses de enero y febrero de 2020, ya que en México el confinamiento empezó a finales de marzo.
+</div>
+
+# <span style="color:rgb(0, 0, 205)">Etapas</span>
+&nbsp;
+
+Como este trabajo consistará en la creación de un modelo de aprendizaje supervisado para una serie de tiempo la etapa del análisis exploratorio es un poco más densa que los análisis exploratorios descriptivos comunes. Esta etapa se constituye de las siguientes fases: 
+
+* Análisis Exploratorio
+  + Análisis visual
+  + Detección de outliers
+  + Correlogramas
+  + Descomposición de la serie
+  + Análisis de estacionariedad
+  + Detección de estacionalidad
+
+# <span style="color:rgb(0, 0, 205)">Set up</span>
+&nbsp;
+
+Iniciamos configurando las opciones generales que vamos a requerir para el desarrollo de este proyecto.
+
+```{r setup, message=FALSE, comment="", warning=FALSE, results='hide'}
+knitr::opts_chunk$set(echo = TRUE,
+                      warning = FALSE,
+                      message = FALSE,
+                      warning = FALSE,
+                      fig.align = "center",
+                      out.width = "90%",
+                      out.height = "70%")
+
+paquetes <- c('tidyverse',      # manipulación datos
+              'lubridate',      # manejar fechas
+              'knitr',          # manejo de tablas
+              'kableExtra',     # manejo de tablas
+              'plotly',         # gráficos interactivos
+              'gridExtra',      # layout de graficos ggplot
+              'nortest',        # pruebas estadísticas
+              "summarytools",   # estadísticas univariantes
+              "TSstudio",       # time series
+              "forecast",       # time series
+              "zoo",            # time series
+              "anomalize",      # anomalias
+              "tseries",        # serie de tiempo
+              "FitAR",          # arima
+              "ggfortify",      # diagnosis residuales
+              "lmtest",         # test coeficientes arima
+              "strucchange",    # gráfico CUSUM test
+              'prophet',        # modelo prophet
+              'tidymodels')     # manejo de modelos
+
+instalados <- paquetes %in% installed.packages()
+
+if(sum(instalados == FALSE) > 0) {
+  install.packages(paquetes[!instalados])
+}
+
+lapply(paquetes, require, character.only = TRUE)
+
+```
+
+&nbsp;
+
+# <span style="color:rgb(0, 0, 205)">Carga de datos</span>
+&nbsp;
+
+<div class=text-justify>
+La información para este análisis es pública y los datos así como su descripción se encuentran en la página del [AICM](https://www.aicm.com.mx/estadisticas-del-aicm/17-09-2013).
+
+Es importante aclarar que los datos originales se encuentran dentro de informes en formato pdf, por lo que, para extraerlos se recurrió a la técnica conocida como **Reconocimiento Óptico de Caracteres (OCR)**. Para el periodo 2012-2019, se utilizó R y para el resto del periodo 2008-2011 se utilizó Python, ya que ofreció los mejores resultados para esos años. Los archivos con todo el código, de R y Python, se pueden encontrar en mi repositorio de [github](https://github.com/arojasmor/Pasajeros). Habiendo hecho esta aclaración, a continuación, ya solo se importa el archivo final:
+</div>
+
+```{r variables}
+salidas <- read.csv("Salidas_Nacionales.csv")
+
+head(salidas)
+
+glimpse(salidas)
+```
+
+En este primer resumen podemos ver que la variable Fecha está como character, por lo que, es necesario convertirla al formato correcto:
+
+```{r}
+salidas$Fecha <- dmy(salidas$Fecha)
+glimpse(salidas)
+```
+
+Ya tenemos la variable Fecha en el formato correcto, sin embargo, la mayoría de las funciones relacionadas con el análisis de una serie temporal requieren que los datos estén en formato de serie de tiempo (ts), por lo que, haremos la conversion:
+
+```{r}
+salidas.ts <- ts(salidas[,2], start = c(2008, 1), end = c(2019, 12), frequency = 12)
+
+ts_info(salidas.ts)
+```
+
+Ahora si, ya tenemos nuestra serie de tiempo la cual inicia en enero de 2008 y termina en diciembre de 2019. Pasemos ahora al análisis exploratorio.
+
+&nbsp;
+
+# <span style="color:rgb(0, 0, 205)">Análisis exploratorio</span>
+
+## <span style="color:rgb(0, 0, 205)">Análisis visual</span>
+
+Empecemos por analizar visualmente la serie para conocer qué forma tiene así como sus principales medidas estadísticas:
+
+```{r}
+salidas %>% 
+  ggplot(aes(Fecha, Salidas)) +
+  geom_line() +
+  scale_x_date(date_breaks = "6 month", date_labels = "%Y-%b") +
+  theme(axis.text.x = element_text(angle = 90, size = 8)) +
+  scale_y_continuous(labels = scales::comma) +
+  labs(title = "AICM: Salidas Nacionales e Internacionales 2008-2019")
+```
+
+<div class=text-justify>
+Lo que se puede apreciar es que hasta finales de 2010 la tendencia es constante y hasta un poco decreciente, sin embargo, desde inicios de 2011 la tendencia es creciente y aditiva. Esta serie claramente muestra un cambio de tendencia, lo que muy probablemente ocasione que no se pueda cumplir el supuesto de estacionariedad incluso si aplicamos diferencias. Conviene de una vez comprobar ese cambio o quiebre, para lo cual haremos lo siguiente:
+
+1. Crear el gráfico CUSUM, que nos mostrará visualmente si la serie presenta un quiebre y en qué parte.
+2. Crear una variable dicotómica que tomará valores de 0 hasta enero de 2011 y posterior a esa fecha tomara valores de 1.
+3. Hacer una regresión lineal cuyas variables independientes serán: la variable dicotómica creada, el tiempo (que será un consecutivo) y la interacción entre el tiempo y la variable dicotómica.
+</div>
+
+```{r}
+t <- c(1:length(salidas.ts))
+
+p.salidas <- efp(salidas.ts ~ t, type = "OLS-CUSUM")
+
+plot(p.salidas)
+
+```
+
+La gráfica nos indica que la serie sí presenta un quiebre en su tendencia al parecer desde 2009 hasta inicios de 2011. Ahora, lo comprobaremos formalmente con una regresión.
+
+```{r}
+t.salidas <- salidas %>% 
+  mutate(D = if_else(Fecha < "2011-02-01", 0, 1))
+
+reg <- lm(Salidas ~ D + t + (D*t), data = t.salidas)
+
+summary(reg)
+```
+
+<div class=text-justify>
+Los coeficientes de la variable dicotómica y de su interacción con el tiempo salieron significativos. Ahora, el coeficeinte de la variable dicotómica D, es el intercepto diferencial y el coeficiente de la interacción entre el tiempo y la variable dicotómica es el coeficiente de la pendiente diferencial. Lo anterior, significa que los dos periodos son distintos y las causas de la diferencia son tanto el intercepto como la pendiente.
+
+Por lo anterior, la serie que vamos a modelar presenta cambio de tendencia a partir de 2011, lo cual se explica en parte debido a que en 2008-2009 se presentó la crisis financiera y, además, en 2009, en México, inició la crisis sanitaria de la Influenza H1N1, también, a inicios de 2011 empezaron los problemas financieros de la empresa Mexianana de Aviación, la cual terminó por cerrar sus operaciones a finales de agosto de ese mismo año. Todos esos acontecimientos afectaron la economía lo que explica la tendencia a la baja en el periodo 2008-2011.
+
+Además, se puede sospechar que hay presencia de estacionalidad por el patrón que sigue la serie, también, hay que considerar que la data representa a las personas que viajan por avión, por lo que, el sentido común nos indicaría que en periodos vacacionales la cantidad de personas que salen de viaje aumentará. Más adelante lo tendremos que comprobar formalmente.
+</div>
+
+## <span style="color:rgb(0, 0, 205)">Datos atípicos (outliers)</span>
+&nbsp;
+
+<div class=text-justify>
+Algo que afecta mucho a los modelos de series de tiempo son los llamados outliers o datos atípicos, ya que al ser observaciones demasiado grandes o pequeñas afectan la capacidad predictiva de los modelos. Por lo tanto, es de vital importancia identificarlos y tratarlos. Un primer análisis visual se hace con apoyo del boxplot:
+</div>
+
+```{r}
+salidas %>% 
+  ggplot(aes(x = factor(1), y = Salidas)) +
+  geom_boxplot(outlier.colour = "red", fill = "grey", alpha = 0.3) +
+  stat_summary(fun = mean, 
+               geom = "point",
+               shape = 20, 
+               size = 4, 
+               color = "red",
+               fill = "red") +
+  scale_y_continuous(labels = scales::comma) +
+  labs(
+    title = "Boxplot Salidas",
+    x = "Salidas"
+  )
+```
+
+En el boxplot se aprecia que la serie no presenta observaciones atípicas, además, se observa que la media (punto rojo) y la mediana no están muy separadas lo que nos indica que no hay asimetria fuerte. Complementemos la gráfica con algunos estadísiticos básicos:
+
+```{r}
+descr(salidas$Salidas,
+      justify = "c",
+      headings = T) %>% 
+  kbl(align = "c", digits = 2 ,format.args = list(big.mark = ",")) %>%
+  kable_paper("hover", full_width = F)
+```
+
+<div class=text-justify>
+Pasemos a otro método más robusto para detectar si realmente en la serie hay observaciones atípicas. Para esto nos apoyaremos del paquete anomalize que nos permitirá calibrar el intervalo de confianza y el porcentaje máximo de posibles valores atípicos a mostrar, entre otras cosas. Algo importante a mencionar es que este paquete requiere que el input esté en formato de tibble o tibble_time, por lo que, no usaremos el objeto tipo serie de tiempo creado al inicio del análisis.
+</div>
+
+```{r message=FALSE}
+salidas.tbl <- salidas
+
+salidas.tbl$Fecha <- as.yearmon(salidas.tbl$Fecha)
+salidas.tbl$Salidas <- as.numeric(salidas.tbl$Salidas)
+
+salidas.tbl <- as_tibble(salidas.tbl)
+
+prep_tbl_time(salidas.tbl, message = TRUE)
+
+salidas.tbl %>% 
+  time_decompose(Salidas, method = "stl") %>% 
+  anomalize(remainder, method = "gesd", max_anoms = 0.2, alpha = 0.03) %>% 
+  time_recompose() %>% 
+  plot_anomalies(time_recomposed = TRUE, 
+                 alpha_dots = 0.4,
+                 alpha_ribbon = 0.1,
+                 fill_ribbon = "grey80") + 
+  scale_y_continuous(labels = scales::comma) + 
+  labs(title = "Detectando Anomalías", y = "Salidas")
+
+```
+
+<div class=text-justify>
+En la gráfica anterior podemos ver que se detectaron algunas observaciones atípicas, sin embargo, al parecer solo uno de ellos está muy alejado del patrón de la serie. Tendremos que tratarlo para que no nos cause problemas más adelante.
+
+Para identificar qué observaciones son atípicas usaremos la función tsoutliers del paquete forecast, ya que permite hacer la identificación y, además, nos propondrá los valores a sustituir.
+</div>
+
+```{r}
+tsoutliers(salidas.ts) %>% 
+  as.data.frame() %>%
+  rename(Observacion = index, Reemplazo = replacements) %>% 
+  kbl(align = "c",digits = 0 ,format.args = list(big.mark = ",")) %>%
+  kable_paper("hover", full_width = F)
+```
+
+<div class=text-justify>
+Vemos que la función identifica las observaciones en las posiciones 14 y 17 como atípicas, y nos muestra los valores por los cuales haría la sustitución (que utiliza el método de interpolación lineal). El trabajo lo hace la función tsclean que no solo sustituye los valores atípicos sino que también identifica valores faltantes (que no es este el caso).
+</div>
+
+Veamos gráficamente cuáles serán los puntos que se sustituirán:
+
+```{r, message=FALSE}
+# nuevos puntos
+autoplot(tsclean(ts(salidas$Salidas)), series = "clean", colour = 'red', lwd = 0.9) +
+  autolayer(ts(salidas$Salidas), series = "original", color = 'gray', lwd = 1) +
+  geom_point(data = tsoutliers(salidas.ts) %>% as.data.frame(), 
+             aes(x = index, y = replacements), col = 'blue') +
+  scale_y_continuous(labels = scales::comma) +
+  labs(title = "Sustitución Outliers: nuevos puntos", x = "Tiempo", y = "Salidas")
+```
+
+Los puntos en color azul serán las nuevas observaciones que reemplazarán a los outliers que se identificaron. Se hace la sustitución:
+
+```{r}
+salidas.ts <- tsclean(salidas.ts)
+
+```
+
+Se hace el reemplazo en la base original para volver a ver la gráfica de las anomalías:
+
+```{r, message=FALSE}
+# se actualizan los datos en el dataframe original
+salidas$Salidas[14] <- 878178.1
+salidas$Salidas[17] <- 1039967.7
+
+# se repite el proceso para ver la grafica
+
+salidas.tbl <- salidas
+
+salidas.tbl$Fecha <- as.yearmon(salidas.tbl$Fecha)
+salidas.tbl$Salidas <- as.numeric(salidas.tbl$Salidas)
+
+salidas.tbl <- as_tibble(salidas.tbl)
+
+#prep_tbl_time(salidas.tbl, message = TRUE)
+
+salidas.tbl %>% 
+  time_decompose(Salidas, method = "stl") %>% 
+  anomalize(remainder, method = "gesd", max_anoms = 0.2, alpha = 0.03) %>% 
+  time_recompose() %>% 
+  plot_anomalies(time_recomposed = TRUE, 
+                 alpha_dots = 0.4,
+                 alpha_ribbon = 0.1,
+                 fill_ribbon = "grey80") +
+  scale_y_continuous(labels = scales::comma) +
+  labs(title = "Detectando Anomalías", y = "Salidas")
+
+```
+
+Se siguen detectando datos atípicos, sin embargo, no están muy alejados del intervalo de confianza, por lo que, nos quedaremos con esta serie.
+
+Algo importante a mencionar es que se debe tener bien claro el objetivo del análisis que se esté buscando, ya que en algunos casos podría ser **incorrecto sustituir las observaciones atípicas.**
+
+## <span style="color:rgb(0, 0, 205)">Correlogramas</span>
+&nbsp;
+
+<div class=text-justify>
+Para todos los modelos de series de tiempo es de suma importancia revisar las funciones de autocorrelación tanto simple como parcial con el propósito de empezar a conocer cómo está la estructura de los datos. Los correlogramas en palabras simples nos muestran la memoria de la serie, o sea, qué tanto depende el dato actual de lo que sucedió en el pasado. veamos los correlogramas de la serie con 48 rezagos, que son un tercio de la longitud de la serie (lo recomendado):
+</div>
+
+```{r}
+ts_cor(salidas.ts, lag.max = 48)
+```
+&nbsp;
+
+<div class=text-justify>
+Al observar el correlograma ACF podemos sospechar que la serie no es estacionaria, o sea, la media no es constante a lo largo del tiempo, porque los valores de la función de autocorrelación no decaen rápidamente conforme aumentan los rezagos en el tiempo. Además, al parecer también hay presencia de estacionalidad, ya que en PACF hay coeficientes significativos, por lo que, tenemos que descomponer la serie para ver cada componente por separado.
+</div>
+
+## <span style="color:rgb(0, 0, 205)">Descomposición de la serie</span>
+&nbsp;
+
+Vamos a generar las gráficas de los componentes de esta serie: tendencia, estacionalidad y residuo.
+
+```{r}
+ts_decompose(salidas.ts, type = "additive")
+```
+
+<div class=text-justify>
+Lo que se puede apreciar en las gráficas es que la tendencia es aditiva, ya que la serie va en aumento con el tiempo y las oscilaciones no se van haciendo más grandes sino que se mantienen del mismo tamaño. Lo anterior, tenemos que confirmarlo de manera un poco más formal.
+
+Hay presencia de estacionalidad muy marcada, ya que el mismo patrón se repite año tras año. También, hay que confirmarlo e identificar en qué meses se presenta.
+
+Vamos a identificar formalmente el tipo de tendencia que tiene la serie, para lo cual se necesita hacer lo siguiente:
+
+* calcular el logaritmo de la mediana para cada periodo.
+* calcular el logaritmo de la diferencia entre el percentil 80 y el percentil 20 para cada periodo.
+* comparar ambas series en un gráfico de dispersión.
+* calcular el coeficiente de correlación.
+* probar la significancia estadistica de dicho coeficiente.
+</div>
+
+```{r}
+tabla <- salidas %>% 
+  mutate(
+    Año = year(Fecha),
+    Mes = month(Fecha)
+  ) %>% 
+  select(-Fecha) %>% 
+  group_by(Año) %>% 
+  summarise(ln_Mediana = log(median(Salidas)),
+         ln_Rango = log((quantile(Salidas, 0.8) - quantile(Salidas, 0.2))))
+  
+tabla %>% 
+  ggplot(aes(ln_Mediana, ln_Rango)) +
+  geom_point() +
+  labs(title = "Niveles vs Dispersión",
+       x = "Nivel",
+       y = "Dispersión")
+
+```
+
+```{r}
+cor(tabla$ln_Mediana, tabla$ln_Rango)
+cor.test(tabla$ln_Mediana, tabla$ln_Rango)
+```
+
+<div class=text-justify>
+Al ver la gráfica creada podemos ver que existe cierta dependencia y tendencia positiva entre el nivel y la dispersión, lo que nos sugiere que la tendencia es de tipo multiplicativa, sin embargo, al volver a la gráfica en niveles se observa que en los primeros años la serie es constante y a partir de 2011 se presenta tendencia creciente. Por lo anterior, los primeros años están jalando o disfrasando el verdadero tipo de tendencia de la serie. Además, hay que recordar que ya comprobamos que la serie presenta un quiebre de tendencia, lo cual afecta esta gráfica, ya que las primeras observaciones que corresponden al periodo 2008-2011 la relación es positiva y para el periodo 2012-2019 parece que no hay relación.
+</div>
+
+## <span style="color:rgb(0, 0, 205)">Análisis de estacionariedad</span>
+&nbsp;
+
+<div class=text-justify>
+En esta parte, vamos a analizar formalmente la estacionariedad de la serie. En series de tiempo, es necesario que la serie a modelar sea estable, o sea, tenga una media y varianza constantes, sobre todo si el modelo a usar para realizar el pronóstico es un arima. Antes del análisis hay que tener presente que la serie al presentar quiebre de tendencia afectará cualquier prueba de estacionariedad que se le haga, por lo tanto, es de esperar que, aunque se apliquen diferencias, puede que no pase la prueba elegida.
+</div>
+
+Volvamos a mirar los correlogramas:
+
+```{r}
+ggAcf(salidas.ts, lag.max = 48)
+
+ggPacf(salidas.ts, lag.max = 48)
+
+```
+
+En el ACF vemos que los coeficientes decaen lentamente, lo cual es un indicativo de que la serie no es estacionaria, sin embargo, para confirmarlo formalmente haremos el test de raíz unitaria de Augmented Dickey-Fuller:
+
+```{r, message=FALSE}
+adf.test(salidas.ts)
+```
+
+<div class=text-justify>
+El p-valor de la prueba (0.01203) es menor al nivel de significancia de 0.05, por lo que, la prueba nos indica que la serie es estacionaria. Contrario a lo que nos mostraba el correlograma, o sea, al no tener raíz unitaria la serie no presenta un patrón sistemático impredecible. Sin embargo, vamos a determinar con apoyo de un gráfico y una regresión si debemos hacer alguna transformación a los datos, ya que la gráfica en niveles de la serie sugiere estabilizar la serie. Será la gráfica conocida como rango/media, que consiste en calcular la media de cada periodo (año) y la varianza. Posteriormente, se hace una regresión con ambas variables y si es significativo el coeficiente asociado con la media entonces hay que aplicar alguna transformación a la serie:
+</div>
+
+```{r}
+tabla2 <- salidas %>% 
+  mutate(
+    Año = year(Fecha),
+    Mes = month(Fecha)
+  ) %>% 
+  select(-Fecha) %>% 
+  group_by(Año) %>% 
+  summarise(ln_Media = log(mean(Salidas)),
+         ln_varianza = log(var(Salidas)))
+
+ggplot(tabla2, aes(x = ln_Media, y = ln_varianza)) +
+  geom_point() +
+  labs(title = "Gráfico rango-media")
+
+coeftest(lm(ln_varianza ~ ln_Media, data = tabla2))
+```
+
+En el gráfico se aprecia que los primeros años están jalando la tendencia de la nube de puntos, además, el resultado de la regresión nos indica que debemos hacer alguna transformación a la serie, ya que el coeficiente asociado con la media resultó significativo.
+
+## <span style="color:rgb(0, 0, 205)">Detección de estacionalidad</span>
+&nbsp;
+
+Ahora, pasemos al análisis de la estacionalidad empezando por el análisis visual:
+
+```{r}
+salidas %>% 
+  mutate(
+    Año = year(Fecha),
+    Mes = month(Fecha)
+  ) %>% 
+  select(-Fecha) %>% 
+  group_by(Año, Mes) %>% 
+  ggplot(aes(x = factor(Mes), y = Salidas)) +
+  geom_boxplot() +
+  scale_y_continuous(labels = scales::comma) +
+  stat_summary(fun = mean, 
+               geom = "point",
+               shape = 20, 
+               size = 4, 
+               color = "red",
+               fill = "red") +
+  labs(title = "Boxplot Meses",
+       x = "Meses")
+
+ggsubseriesplot(salidas.ts) +
+  scale_y_continuous(labels = scales::comma) +
+  labs(title = "Salidas Promedio", x = "Meses", y = "Salidas")
+```
+
+Al ver el boxplot y la gráfica de promedios mensuales parece que si hay diferencias entre los meses en cada año y, por lo tanto, presencia de un patrón estacional. Sigamos con el análisis de la serie:
+
+```{r}
+ggseasonplot(salidas.ts) + 
+  scale_y_continuous(labels = scales::comma) +
+  labs(title = "Salidas por Mes", y = "Salidas", x = "Mes")
+```
+
+<div class=text-justify>
+Las gráficas vistas hasta aquí nos indican que es en el mes de julio donde la afluencia de pasajeros es mayor, lo cual coincide con el periodo vacacional de verano. También, se aprecia que el segundo mes más alto de salidas es diciembre como era de esperarse por la temporada navideña.
+</div>
+
+Sigamos viendo algunas vistas más para confirmar el patrón estacional existente:
+
+```{r}
+ts_seasonal(salidas.ts, type = "all", title = "Gráficos con la Tendencia")
+```
+
+El patrón estacional es el mismo a lo largo del tiempo: alta demanda en el mes de julio y diciembre y baja demanda en febrero y septiembre.
+
+Para tener una visión más clara del patrón estacional vamos a quitar el efecto de la tendencia, ya que la serie crece año tras año desde el año 2011:
+
+```{r, message=FALSE}
+ts_seasonal(salidas.ts - decompose(salidas.ts)$trend, 
+            type = "all", 
+            title = "Gráfico sin Tendencia")
+```
+
+<div class=text-justify>
+Sin el efecto de la tendencia se aprecia más claramente el patrón estacional. Podemos identificar que julio, agosto y diciembre son los meses de mayores salidas o vuelos, por el contrario, enero, febrero y septiembre los meses de menor demanda o salidas de pasajeros.
+</div>
+
+Otra vista diferente de la serie es mediante un heatmap:
+
+```{r}
+ts_heatmap(salidas.ts, title = "Salidas")
+```
+
+<div class=text-justify>
+Se aprecia que la demanda de pasajeros que sale de viaje ya sea al interior del país o al extranjero, desde la Ciudad de México, ha estado creciendo de manera sostenida desde los últimos 8 años. Además, se confirma que julio es el mes con mayor demanda seguido por el mes de diciembre.
+</div>
+
+Ahora, el siguiente paso es identificar el nivel de correlación entre la serie y sus rezagos:
+
+```{r}
+ts_cor(salidas.ts, lag.max = 48)
+```
+
+<div class=text-justify>
+Como era de esperarse sí hay una correlación entre la serie y sus rezagos estacionales. El retraso estacional (o retraso 12) de la serie tiene una fuerte relación lineal con la serie. Lo anterior, lo podemos ver más claramente al graficar estos componentes:
+</div>
+
+```{r}
+ts_lags(salidas.ts, lags = c(12, 24, 36, 48))
+```
+
+<div class=text-justify>
+Solo nos queda identificar formalmente la estacionalidad. Para ello vamos a crear variables dummies, una por cada mes para, posteriormente, hacer una regresión sin incluir la constante para evitar la colinealidad. Para que el efecto estacional este presente los parámetros estimados del modelo deben ser estadísticamente distintos de cero, individualmente.
+</div>
+
+```{r}
+tabla3 <- salidas %>% 
+  mutate(
+    Mes = month(Fecha)
+  ) %>% 
+  mutate(
+    Enero = ifelse(Mes == 1, 1,0),
+    Febrero = ifelse(Mes == 2, 1,0),
+    Marzo = ifelse(Mes == 3, 1,0),
+    Abril = ifelse(Mes == 4, 1,0),
+    Mayo = ifelse(Mes == 5, 1,0),
+    Junio = ifelse(Mes == 6, 1,0),
+    Julio = ifelse(Mes == 7, 1,0),
+    Agosto = ifelse(Mes == 8, 1,0),
+    Septiembre = ifelse(Mes == 9, 1,0),
+    Octubre = ifelse(Mes == 10, 1,0),
+    Noviembre = ifelse(Mes == 11, 1,0),
+    Diciembre = ifelse(Mes == 12, 1,0)
+  ) %>% 
+  dplyr::select(-Fecha, -Mes)
+
+modelo <- lm(Salidas ~ 0 +., data = tabla3)
+summary(modelo)
+```
+
+Los coeficientes resultaron significativos, por lo que, confirmamos la presencia de estacionalidad en la serie.
+
+Ya para terminar esta sección, calcularemos los índices de variación estacional para darnos una idea del impacto en cada mes. Para lo cual, haremos lo siguiente:
+
+* se descompone la serie.
+* se divide la serie original entre su tendencia.
+* se promedian los periodos.
+* se ajustan los indices para que sumen el total de periodos (vía ponderaciones).
+
+```{r}
+dc <- decompose(salidas.ts, type = "additive")
+
+salidas %>% 
+  mutate(
+    serie = dc$x,
+    tendencia = dc$trend,
+    Año = year(Fecha),
+    Mes = month(Fecha),
+    v1 = serie/tendencia
+  ) %>% 
+  group_by(Mes) %>% 
+  summarise(ie = mean(v1, na.rm = T)) %>% 
+  kbl(align = "c", digits = 4) %>% kable_paper("hover", full_width = F)
+```
+
+Los resultados nos indican que en el mes de julio la demanda es mayor al promedio anual un 17%, aproximadamente, por el contrario, en el mes de febrero la demanda de salidas es 16% menor al promedio anual, en otras palabras, en los meses de febrero, en promedio,  solo se llega al 84% del promedio anual.
+
+# <span style="color:rgb(0, 0, 205)">Transformaciones</span>
+&nbsp;
+
+<div class=text-justify>
+Vimos que la serie en niveles tiene tendencia creciente y de tipo aditiva, porque los picos en cada año no aumentan. Por lo anterior, se tiene que aplicar alguna transformación y la más común son las diferencias.
+
+Hay que identificar cuántas diferenciaciones aplicar a la serie. Se puede hacer aplicando 1 diferencia y revisar el correlograma hasta que veamos la serie sin tendencia, sin embargo, optaremos por un camino más directo con apoyo de la función ndiffs del paquete forecast que nos indicará cuántas diferencias aplicar a la serie:
+
+Número de diferenciaciones a la parte regular de la serie: `r ndiffs(salidas.ts)`
+
+Ya que confirmamos que hay estacionalidad en la serie tenemos que determinar cuántas diferencias aplicar. Nos apoyaremos de la función nsdiffs del paquete forecast que nos indica el orden de diferenciación (esto tambien se puede hacer manualmente diferenciando la serie en los periodos estacionales y revisando el correlograma):
+
+Número de diferenciaciones a la parte regular de la serie: `r nsdiffs(salidas.ts)`
+
+Por lo tanto, hay que diferenciar 1 vez en la parte regular y 1 vez a la parte estacional de la serie en niveles. Esto se especificará en el algoritmo del modelo.
+</div>
+
+# <span style="color:rgb(0, 0, 205)">Conjunto de entrenamiento y prueba</span>
+&nbsp;
+
+<div class=text-justify>
+Antes de generar el primer modelo, es necesario dividir la serie en una parte para entrenar el modelo y otra parte para validarlo. Cuando se trabaja con series de tiempo dicha partición no se hace de manera aleatoria como para cualquier otro modelo de machine learning, ya que las series de tiempo van ordenadas de manera cronológica, por lo tanto, el conjunto de test siempre será la parte final de la serie. Consideraremos el año 2019 para probar el modelo y el resto para entrenar el modelo.
+</div>
+
+```{r}
+salidas.ts.train <- window(salidas.ts, start = c(2008,1), end = c(2018,12))
+salidas.ts.test <- window(salidas.ts, start = c(2019,1), end = c(2019,12))
+```
+
+# <span style="color:rgb(0, 0, 205)">Creación del modelo base</span>
+&nbsp;
+
+<div class=text-justify>
+Cuando el objetivo de un proyecto sea el pronosticar una serie de tiempo, es altamente recomendable hacer un primer modelo que será la base a partir del cual se tratará de mejorarlo. Hay muchas métricas para evaluar este tipo de modelos, la mayoría relacionadas con los errores, o sea, la diferencia entre el valor real y el valor pronosticado. Ahora, lo que se debe evaluar es el dataset de test, o sea, la parte del conjunto de datos que el modelo no ha visto. En el presente análisis usaremos el Mean Absolute Percentage Error (MAPE), ya que es más fácil de interpretar.
+
+Nuestro primer modelo será el modelo básico de suavizado exponencial ets, que está formado por: el componente de error, el componente de tendencia y el componente estacional.
+</div>
+
+# **ETS**: **E**xponen**T**ial **S**moothing
+
+```{r}
+fit.ets <- ets(salidas.ts.train,
+               model = "ZZZ",
+               damped = T,
+               additive.only = T,
+               lambda = "auto"
+               )
+
+
+fit.ets
+
+```
+
+El resultado del modelo: (A,Ad,A), nos indica que modeló los tres componentes de forma aditiva. Veamos ahora los residuales, para identificar si existe autocorrelación:
+
+```{r}
+checkresiduals(fit.ets, lag = 26)
+```
+
+El p-valor de la prueba nos indica que los errores no son independientes, por lo que, el pasado está influyendo en lo que sucede en el presente. Habrá que corregir esto más adelante, por lo pronto, se sigue anializando este primer modelo.
+
+```{r}
+qqnorm(fit.ets$residuals)
+qqline(fit.ets$residuals)
+
+jarque.bera.test(fit.ets$residuals)
+```
+
+El análisis de la normalidad muestra que los errores no se distribuyen de forma normal. Sin embargo, como es el modelo base sigamos adelante con las predicciones para los siguientes 12 meses.
+
+```{r, message=FALSE, results="asis"}
+fc.ets <- forecast(fit.ets, h = 12)
+
+
+fc.ets %>% as.data.frame() %>% 
+  kbl(align = "c", format.args = list(big.mark = ",")) %>% 
+  kable_paper("hover", full_width = F)
+
+forecast::accuracy(fc.ets, salidas.ts.test)
+
+autoplot(fc.ets) + scale_y_continuous(labels = scales::comma) +
+  labs(title = "Pronóstico Modelo Base: ets(A,Ad,A)", y = "Salidas")
+
+```
+
+Este primer modelo presenta un MAPE de 2.3% para el conjunto de test, no es muy elevado, sin embargo, no pasó los supuestos de independencia de los errores ni normalidad. Veamos cómo se ve la gráfica de las predicciones con la serie original.
+
+```{r}
+test_forecast(forecast.obj = fc.ets, 
+              actual = salidas.ts, 
+              test = salidas.ts.test) %>% 
+  layout(legend = list(x = 0.1, y = 0.95))
+
+```
+
+Ajustemos el modelo ets para mejorarlo diferenciando 1 vez la serie:
+
+```{r}
+salidas.ts.diff <- diff(salidas.ts)
+
+salidas.ts.train.diff <- window(salidas.ts.diff, start = c(2008,2), end = c(2018,12))
+salidas.ts.test.diff <- window(salidas.ts.diff, start = c(2019,1), end = c(2019,12))
+
+fit.ets.diff <- ets(salidas.ts.train.diff,
+               model = "ZZZ",
+               damped = T
+               )
+
+checkresiduals(fit.ets.diff)
+
+qqnorm(fit.ets.diff$residuals)
+qqline(fit.ets.diff$residuals)
+
+jarque.bera.test(fit.ets.diff$residuals)
+```
+
+<div class=text-justify>
+En el correlograma de los residuales podemos ver que al inicio solo un coeficiente sale de las bandas, sin embargo, el test no lo pasa. En cuanto a la prueba de normalidad vemos que ya la pasa al tener un p-valor mayor al 0.05. Nos quedamos con este modelo, por lo que, ahora se pronosticarán los próximos 12 meses.
+</div>
+
+```{r, message=FALSE}
+fc.ets.diff <- forecast(fit.ets.diff, h = 12)
+
+last_salidas <- salidas.ts.train[132]
+pred <- fc.ets.diff$mean
+
+de_diff_salidas_fore <- cumsum(pred) + last_salidas
+
+ddiff_sfore_ts <- ts(de_diff_salidas_fore, start = 133)
+
+ddiff_sfore_ts <- ts(ddiff_sfore_ts, start = c(2019, 1), frequency = 12)
+
+ddiff_sfore_ts %>% as.data.frame() %>% 
+  rename(Pronostico = x) %>%  mutate(Fecha = salidas$Fecha[133:144]) %>% 
+  select(Fecha, Pronostico) %>% 
+  kbl(align = "c", format.args = list(big.mark = ",")) %>% 
+  kable_paper("hover", full_width = F)
+
+forecast::accuracy(ddiff_sfore_ts, salidas.ts.test)
+
+ts.plot(salidas.ts, ddiff_sfore_ts,
+        lty = c(1,3), col = c("steelblue", "red"), 
+        main = "Pronóstico modelo en 1ras Diferencias: ets(A,Ad,A)", 
+        ylab = "Salidas")
+
+```
+
+El modelo con diferencias mejoró, ya que se reduce el error de test de 2.3 a 1.58.
+
+Ahora, optimizaremos los parámetros.
+
+<div class=text-justify>
+Este algoritmo tiene tres parámetros que están relacionados con el suavisado (alpha), la tendencia (beta) y la estacionalidad (gamma). Por tanto, vamos a optimizarlos para encontrar el valor que nos arroje el modelo con el menor error y una vez encontrado el valor del componente volveremos a reajustar el modelo.
+</div>
+
+Alpha: componente de suavisado
+
+```{r}
+# identificar el alpha óptimo
+alpha <- seq(.01, .99, by = .001)
+
+MAPE <- NA
+
+for(i in seq_along(alpha)) {
+  fit <- ets(salidas.ts.train, 
+             alpha = alpha[i],
+             model = "ZZZ",
+             damped = T,
+             additive.only = T,
+             lambda = "auto")
+  
+  fc.fit <- forecast(fit, h = 12)
+
+  MAPE[i] <- forecast::accuracy(fc.fit, salidas.ts.test)[2,5]
+}
+
+# convertir a data frame e identificar el valor del alpha mínimo
+alpha.fit <- tibble(alpha, MAPE)
+alpha.min <- filter(alpha.fit, MAPE == min(MAPE))
+alpha.min
+
+# gráfico MAPE vs. alpha
+ggplot(alpha.fit, aes(alpha, MAPE)) +
+  geom_line() +
+  geom_point(data = alpha.min, aes(alpha, MAPE), size = 2, color = "blue") +
+  labs(title = "Mean Absolute Percentage Error")
+
+```
+
+Beta: componente de tendencia
+
+```{r, results="hide"}
+# identificar el beta óptimo
+beta <- seq(.01, .99, by = .001)
+
+MAPE <- NA
+
+for(i in seq_along(beta)) {
+  fit <- ets(salidas.ts.train, 
+             beta = beta[i],
+             model = "ZZZ",
+             damped = T,
+             additive.only = T,
+             lambda = "auto")
+  
+  fc.fit <- forecast(fit, h = 12)
+  
+  MAPE[i] <- forecast::accuracy(fc.fit, salidas.ts.test)[2,5]
+}
+
+```
+
+```{r}
+# convertir a data frame e identificar el valor del beta mínimo
+beta.fit <- tibble(beta, MAPE)
+beta.min <- filter(beta.fit, MAPE == min(MAPE))
+beta.min
+
+# gráfico MAPE vs. beta
+ggplot(beta.fit, aes(beta, MAPE)) +
+  geom_line() +
+  geom_point(data = beta.min, aes(beta, MAPE), size = 2, color = "blue") +
+  labs(title = "Mean Absolute Percentage Error")
+
+```
+
+Gamma: componente de estacionalidad
+
+```{r}
+# identificar el gamma óptimo
+gamma <- seq(.01, .99, by = .001)
+
+MAPE <- NA
+
+for(i in seq_along(gamma)) {
+  fit <- ets(salidas.ts.train, 
+             gamma = gamma[i],
+             model = "ZZZ",
+             damped = T,
+             additive.only = T,
+             lambda = "auto")
+  
+  fc.fit <- forecast(fit, h = 12)
+  
+  MAPE[i] <- forecast::accuracy(fc.fit, salidas.ts.test)[2,5]
+}
+
+# convertir a data frame e identificar el valor del gamma mínimo
+gamma.fit <- tibble(gamma, MAPE)
+gamma.min <- filter(gamma.fit, MAPE == min(MAPE))
+gamma.min
+
+# gráfico MAPE vs. gamma
+ggplot(gamma.fit, aes(gamma, MAPE)) +
+  geom_line() +
+  geom_point(data = gamma.min, aes(gamma, MAPE), size = 2, color = "blue") +
+  labs(title = "Mean Absolute Percentage Error")
+
+```
+
+Al optimizar los tres componentes el que generó el menor error fue alpha con 1.53. Se reajusta del modelo con ese parámetro:
+
+```{r}
+# reajuste del modelo con alpha optimo
+fit.ets <- ets(salidas.ts.train,
+               model = "ZZZ",
+               damped = T,
+               additive.only = T,
+               lambda = "auto",
+               alpha = alpha.min$alpha
+               )
+
+fit.ets
+
+```
+
+```{r}
+checkresiduals(fit.ets, lag = 26)
+```
+
+```{r}
+qqnorm(fit.ets$residuals)
+qqline(fit.ets$residuals)
+
+jarque.bera.test(fit.ets$residuals)
+```
+
+```{r}
+fc.ets <- forecast(fit.ets, h = 12)
+
+forecast::accuracy(fc.ets, salidas.ts.test)
+```
+
+```{r, message=FALSE}
+test_forecast(forecast.obj = fc.ets, 
+              actual = salidas.ts, 
+              test = salidas.ts.test) %>% 
+  layout(legend = list(x = 0.1, y = 0.95))
+
+
+autoplot(fc.ets) + 
+  scale_y_continuous(labels = scales::comma) +
+  labs(title = "Pronóstico ETS Salidas 2019", y = "Salidas")
+
+```
+
+# **ARIMA**: **A**uto**R**egressive **I**ntegrated **M**oving **A**verage
+&nbsp;
+
+Ahora se optará por un modelo arima para ver si podemos mejorar el error de test y, además, que sus residuales pasen las pruebas de normalidad y autocorrelación. Se comenzará por la generación automática del modelo con apoyo de la función auto.arima del paquete forecast:
+
+```{r}
+fitarima1 <- auto.arima(salidas.ts.train)
+fitarima1
+
+coeftest(fitarima1)
+
+summary(fitarima1)
+
+```
+
+En este primer modelo los tres coeficientes son significativos. Sin embargo, hay que hacer la diagnosis a los residuales:
+
+Autocorrelación:
+
+```{r, message=FALSE}
+checkresiduals(fitarima1)
+
+autoplot(acf(fitarima1$residuals, plot = FALSE))
+autoplot(pacf(fitarima1$residuals, plot = FALSE))
+
+ggtsdiag(fitarima1)
+
+```
+
+<div class=text-justify>
+La gráfica de los residuales no muestra tendencia lo cual es bueno y en los correlogramas solo un coeficiente sale de los límites. El p-value de la prueba Ljung-Box es mayor al 0.05, lo cual nos indica que los residuales no están correlacionados. Además, los p-valores para la prueba Q de Ljung-Box están por encima de 0,05, lo que indica "no significativo".
+</div>
+
+Normalidad:
+
+```{r}
+qqnorm(fitarima1$residuals)
+qqline(fitarima1$residuals)
+
+jarque.bera.test(fitarima1$residuals)
+
+```
+
+El p-value es mayor al 0.05, por lo tanto, podemos afirmar que los residuales de este modelo siguen una distribución normal. 
+
+Este modelo pasa las pruebas de autocorrelación y normalidad, por lo que, podemos darlo como válido y es apto para hacer pronósticos:
+
+Predicción y Evaluación:
+
+```{r}
+fc.fitarima1 <- forecast(fitarima1, h = 12)
+forecast::accuracy(fc.fitarima1, salidas.ts.test)
+```
+
+El error de test es de 1.09, que es menor al mejor modelo ets que se generó anteriormente. Veamos los resultados gráficamente:
+
+```{r}
+test_forecast(forecast.obj = fc.fitarima1, actual = salidas.ts, test = salidas.ts.test) %>% 
+  layout(legend = list(x = 0.1, y = 0.95))
+```
+
+```{r}
+autoplot(fc.fitarima1) + 
+  scale_y_continuous(labels = scales::comma) +
+  labs(title = "Pronóstico auto.arima1 Salidas 2019", y = "Salidas")
+```
+
+Este será nuestro modelo arima base, ya que pasa las pruebas de autocorrelación y normalidad de sus residuales.
+
+Veamos si podemos mejorarlo modificando algunos de sus parámetros:
+
+```{r}
+fitarima2 <- auto.arima(salidas.ts.train, 
+                        trace = T,
+                        stepwise = T,
+                        approximation = T,
+                        test = "adf",
+                        allowdrift = T,
+                        optim.method ="BFGS"
+                        )
+
+coeftest(fitarima2)
+
+summary(fitarima2)
+
+```
+
+En esta corrida el mejor modelo fue un ARIMA(0,1,1)(2,1,0), el cual tiene todos los coeficientes significativos. Analicemos sus residuales.
+
+Autocorrelación:
+
+```{r}
+checkresiduals(fitarima2)
+
+autoplot(acf(fitarima2$residuals, plot = FALSE))
+autoplot(pacf(fitarima2$residuals, plot = FALSE))
+
+ggtsdiag(fitarima2)
+
+```
+
+<div class=text-justify>
+El p-value de la prueba Ljung-Box es mayor al 0.05, por lo tanto, los residuales no están correlacionados, además, en su gráfica no se aprecia ningún patrón. Todos los coeficiente están dentro de las bandas en los correlogramas. Los p-valores para la prueba Q de Ljung-Box están por encima de 0,05, lo que indica "no significativo".
+</div>
+
+Normalidad:
+
+```{r}
+qqnorm(fitarima2$residuals)
+qqline(fitarima2$residuals)
+
+jarque.bera.test(fitarima2$residuals)
+
+```
+
+Los residuales no presentan autocorrelación y se distribuyen normalmente. por tanto, pasamos a hacer las predicciones para conocer el error de test:
+
+Predicción y Evaluación:
+
+```{r}
+fc.fitarima2 <- forecast(fitarima2, h = 12)
+forecast::accuracy(fc.fitarima2, salidas.ts.test)
+```
+
+Arroja un error de 1.49, ligeramente mayor que el modelo anterior (1.08)
+
+veamos las gráficas:
+
+```{r}
+test_forecast(forecast.obj = fc.fitarima2, actual = salidas.ts, test = salidas.ts.test) %>% 
+  layout(legend = list(x = 0.1, y = 0.95))
+```
+
+```{r, message=FALSE}
+autoplot(fc.fitarima2) + 
+  scale_y_continuous(labels = scales::comma) +
+  labs(title = "Pronóstico auto.arima2 Salidas 2019", y = "Salidas")
+
+```
+
+Hagamos un último modelo arima, pero ahora usaremos la función arima, para construirlo por partes:
+
+Primero recordemos la forma de los correlogramas, puesto que nos ayudarán a definir la estructura de modelo:
+
+```{r}
+tsdisplay(salidas.ts.train)
+```
+
+Empecemos por aplicar una diferencia y ver de nuevo los correlogramas:
+
+```{r}
+tsdisplay(diff(salidas.ts.train))
+```
+
+Ahora con 12 rezagos para ver la estructura estacional de la serie:
+
+```{r}
+tsdisplay(diff(salidas.ts.train, lag = 12))
+```
+
+Con la información proporcionada por los correlogramas se creará un modelo arima que para la parte regular sera (2,1,2) y para la parte estacional (0,1,1):
+
+```{r}
+fitarima3 <-  arima(log(salidas.ts.train), 
+                  order = c(2,1,2), 
+                  seasonal = list(order = c(0,1,1),
+                                  period = 12),
+                  method = "ML")
+
+
+coeftest(fitarima3)
+
+summary(fitarima3)
+```
+
+Todos los coeficiente de este modelo son significativos. Ahora se analizan los residuales.
+
+Autocorrelación:
+
+```{r}
+checkresiduals(fitarima3)
+
+autoplot(acf(fitarima3$residuals, plot = FALSE))
+autoplot(pacf(fitarima3$residuals, plot = FALSE))
+
+ggtsdiag(fitarima3)
+
+```
+
+<div class=text-justify>
+Este modelo pasa la prueba de Ljung-Box al tener un p-valor mayor al 0.05, además, la gráfica de los residuales no muestran ningún patrón o tendencia. En los correlogramas solo un coeficiente sale de la banda superior. Los p-valores para la prueba Q de Ljung-Box están por encima de 0,05, lo que indica "no significativo".
+</div>
+
+Normalidad:
+
+```{r}
+qqnorm(fitarima3$residuals)
+qqline(fitarima3$residuals)
+
+jarque.bera.test(fitarima3$residuals)
+```
+
+Los residuales no presentan autocorrelación pero no se distribuyen normalmente. Pasamos a hacer las predicciones para conocer el error de test:
+
+Predicción y Evaluación:
+
+```{r}
+fc.fitarima3 <- forecast(fitarima3, h = 12)
+
+# se invierten los logaritmos
+fc.fitarima3$mean <- exp(fc.fitarima3$mean)
+fc.fitarima3$fitted <- exp(fc.fitarima3$fitted)
+fc.fitarima3$x <- exp(fc.fitarima3$x)
+
+forecast::accuracy(fc.fitarima3, salidas.ts.test)
+```
+
+Arroja un error de 2.78, mayor que el mejor modelo arima (1.08)
+
+veamos las gráficas:
+
+```{r}
+test_forecast(forecast.obj = fc.fitarima3, actual = salidas.ts, test = salidas.ts.test) %>% 
+  layout(legend = list(x = 0.1, y = 0.95))
+```
+
+```{r, message=FALSE}
+fc.fitarima3$lower[,1:2] <- exp(fc.fitarima3$lower[,1:2])
+fc.fitarima3$upper[,1:2] <- exp(fc.fitarima3$upper[,1:2])
+
+autoplot(fc.fitarima3) + 
+  scale_y_continuous(labels = scales::comma) +
+  labs(title = "Pronóstico arima3 Salidas 2019", y = "Salidas")
+
+```
+
+<div class=text-justify>
+Tenemos tres modelos arima los cuales todos pasaron la prueba de autocorrelación en los residuales y solo el modelo arima 3 no pasa la prueba de normalidad. El modelo que presenta el menor error es el 1 con un MAPE de 1.08. Descartaremos el modelo 3 ya que sus residuales no se distribuyen normalmente.
+
+De estos dos modelos elegiremos el modelo 1, porque generó el menor error de test, además, ambos modelos tienen 3 coeficientes, por lo que, no podemos basarnos en el principio de parsimonia (el más simple).
+</div>
+
+# **TSLM**: **T**ime **S**eries **L**inear **M**odel
+
+Se generará el modelo tslm que está diseñado para ajustar modelos lineales con datos de series de tiempo y en el cual se pueden incluir variables predictoras, en particular la tendencia y la estacionalidad.
+
+```{r, message=FALSE}
+salidas.lm  <- tslm(salidas.ts.train ~  trend + season, lambda = "auto")
+
+summary(salidas.lm)
+
+salidas.fcast.lm <- forecast(salidas.lm, h = 12)
+
+test_forecast(forecast.obj = salidas.fcast.lm, actual = salidas.ts, test = salidas.ts.test) %>% 
+  layout(legend = list(x = 0.1, y = 0.95))
+
+salidas.fcast.lm$x <- salidas.ts.train
+forecast::accuracy(salidas.fcast.lm, salidas.ts.test)
+
+autoplot(salidas.fcast.lm) + labs(title = "Pronóstico Modelo tslm1 Salidas 2019")
+
+```
+
+Este primer modelo generó un MAPE de 2.13. Haremos un segundo modelo pero ahora incluyendo la estacionalidad con variables dicotómicas:
+
+```{r, message=FALSE}
+# Usando variables dummies para modelar la estacionalidad
+meses <- seasonaldummy(salidas.ts.train)
+
+salidas.lm2  <- tslm(salidas.ts.train ~ meses + trend + season)
+
+tsdisplay(residuals(salidas.lm2))
+
+salidas.fcast2 <- forecast(salidas.lm2,
+    data.frame(meses = I(seasonaldummy(salidas.ts.train, 12))))
+
+test_forecast(forecast.obj = salidas.fcast2, actual = salidas.ts, test = salidas.ts.test) %>% 
+  layout(legend = list(x = 0.1, y = 0.95))
+
+autoplot(salidas.fcast2) + labs(title = "Pronóstico modelo tslm2 Salidas 2019")
+
+forecast::accuracy(salidas.fcast2, salidas.ts.test)
+
+```
+
+El segundo modelo tslm no mejoró el error de test, ya que este tipo de algoritmo no es adecuado para el tipo de datos que tenemos. Por tanto, probaremos un último modelo para ver si podemos mejorar el error del modelo arima1, que es hasta el momento el que ha generado el menor error de test.
+
+# **PROPHET**
+
+Será el modelo Prophet,creado por Facebook para hacer sus pronósticos comerciales, a ver qué resultados nos genera.
+
+Antes de iniciar con el modelo, es preciso aclarar que este modelo necesita que las columnas donde están las fechas y la variable a pronosticar tengan determinados nombres, por lo que, antes que nada, se procede a renombrar dichas columnas:
+
+```{r}
+# Se verifica el tipo Fecha para el tiempo y se renombran las columnas: "ds" y "y"
+df <- salidas
+
+cleaned_df <- df %>% 
+  rename(ds = Fecha,
+         y = Salidas) %>% 
+  mutate(ds = as.Date(ds, "%d/%m/%Y"))
+
+cleaned_df %>% head()
+```
+
+Se establece la partición de los datos en train y test:
+
+```{r}
+correct_split <- initial_time_split(cleaned_df %>% arrange(ds), prop = 1-(12/144))
+correct_split
+
+cleaned_train <- cleaned_df %>%
+  filter(ds <"2019-01-01")
+
+cleaned_test <- cleaned_df %>%
+  filter(ds >="2019-01-01")
+
+# se visualiza la división
+bind_rows(
+  training(correct_split) %>% mutate(type = "train"),
+  testing(correct_split) %>% mutate(type = "test")
+) %>% 
+  ggplot(aes(x = ds, y= y, color = type, group = NA)) + 
+  geom_line() + 
+  scale_y_continuous(labels = scales::comma) +
+  labs(title = "Split", y = "Salidas")
+
+```
+
+Se crea el modelo y se hace la predicción:
+
+```{r, message=FALSE}
+m <- prophet(df = cleaned_train %>% arrange(ds), yearly.seasonality = T)
+
+future <- make_future_dataframe(m, periods = 12, freq = "month", include_history = TRUE)
+
+forecast <- predict(m, future)
+```
+
+Se grafica la serie con el pronostico:
+
+```{r}
+plot(m, forecast) + 
+  add_changepoints_to_plot(m) +
+  labs(title = "Modelo Prophet: Pronóstico a 12 meses")
+```
+
+Veamos otra vista de las predicciones, en cuántos meses quedó por debajo y por arriba del valor real:
+
+```{r}
+# se valida el set de test
+s <- forecast %>% 
+  inner_join(cleaned_test, by = "ds") %>% 
+  mutate(
+    dif = (y-yhat), 
+    esPositivo = dif >= 0)
+
+s %>% 
+  ggplot(aes(x = ds, y = dif, fill = esPositivo)) + 
+  geom_col(position = "identity") +
+  scale_fill_manual(values = c("firebrick4", "dodgerblue4")) +
+  scale_y_continuous(labels = scales::comma) +
+  theme_minimal() + 
+  labs(title = "Diferencia Entre Salidas Esperadas y Actuales",
+          subtitle = "Las Salidas pronosticadas quedaron por debajo durante la mayor parte del año", y = "Diferencia", x = "Año")
+```
+
+<div class=text-justify>
+En el siguiente gráfico de dispersión, se compara el ajuste de las observaciones pronosticadas contra las observaciones reales. Se aprecia como, al igual que en los demás modelos, el pronóstico del mes de febrero quedó muy por debajo del valor real. En los demás meses los pronósticos se ajustaron relativamente bien.
+</div>
+
+```{r, message=FALSE}
+qplot(s$y, s$yhat, log = "xy") +
+  geom_abline() +
+  scale_y_continuous(labels = scales::comma) +
+  scale_x_continuous(labels = scales::comma) +
+  labs(title = "Comparando las Observaciones Esperadas vs Reales", 
+       y = "Salidas Esperadas",
+       x = "Salidas Reales") +
+  theme_minimal()
+```
+
+Se revisan los errores:
+
+```{r, results="asis"}
+mape <- function(y, yhat) {
+  return(mean(abs(y - yhat)/ y)*100)
+}
+
+eval <- cleaned_test %>% 
+  left_join(forecast, by = "ds") %>% 
+  select(ds, y, yhat, yhat_upper, yhat_lower)
+
+mape.prophet1 <- mape(eval$y, eval$yhat)
+
+cat("MAPE del modelo Prophet 1: ",`mape.prophet1`)
+
+```
+
+Se grafica el pronóstico:
+
+```{r}
+plot(m, forecast) +
+  add_changepoints_to_plot(m) +
+  geom_point(cleaned_test, mapping = aes(as.POSIXct(ds), y), col = "red") +
+  scale_y_continuous(labels = scales::comma) +
+  labs(title = "Pronóstico Modelo Prophet 1", y = "Salidas", x = "Año")
+```
+
+Vemos que este modelo también subestima el mes de febrero, por lo que, vamos a probar la técnica de validación cruzada para crear modelos aditivos y multiplicativos para ver cuáles generan el menor error de generalización:
+
+Se creann los k-folds:
+
+```{r}
+timeseries_k_folds <- sliding_period(cleaned_df %>% arrange(ds), 
+                                     ds,
+                                     period = "year",
+                                     lookback = Inf,
+                                     assess_stop = 1)
+
+```
+
+Con apoyo de una función se crearán los diferentes tipos de modelos:
+
+```{r}
+tune_prophet <- function(splits){
+  train_data <- analysis(splits)
+  test_data <- assessment(splits)
+  
+  m1 <- prophet(df = train_data, seasonality.mode = "additive")
+  m2 <- prophet(df = train_data, seasonality.mode = "multiplicative")
+  
+  future <- make_future_dataframe(m1, 
+                                  periods = nrow(test_data), 
+                                  freq = "month",
+                                  include_history = FALSE)
+  
+  
+  bind_rows(
+    predict(m1, future) %>% select(ds, yhat) %>% mutate(type = "additive"),
+    predict(m2, future) %>% select(ds, yhat) %>% mutate(type = "multiplicative")
+  ) %>% left_join(test_data, by = "ds")
+}
+
+```
+
+Se muestran los forecast, su tipo y métrica de error:
+
+```{r, results="hide"}
+# se hacen los k-folds
+ts_tune <- timeseries_k_folds %>% 
+  slice_tail(n = 10) %>%
+  mutate(res = map(splits, tune_prophet))
+
+```
+
+```{r}
+# errores
+ts_tune %>% 
+  select(id, res) %>% 
+  unnest(res) %>% 
+  group_by(id, type) %>% 
+  arrange(ds) %>% 
+  mutate(forecast = paste0("forecast_", row_number())) %>% 
+  ungroup() %>% 
+  select(forecast, type, ds, yhat, y) %>% 
+  group_by(forecast, type) %>% 
+  yardstick::mape(truth = y, estimate = yhat) %>% 
+  ungroup() %>% 
+  group_by(forecast) %>% 
+  slice_min(.estimate) %>% 
+  ungroup()
+
+```
+
+Veamos la mediana de los errores (MASE) en los modelos aditivos y multiplicativos, pero comparando los pronósticos con un modelo ingenuo (naive):
+
+```{r, message=FALSE}
+ts_tune %>% 
+  select(id, res) %>% 
+  unnest(res) %>% 
+  group_by(id, type) %>% 
+  arrange(ds) %>% 
+  mutate(forecast = paste0("forecast_", row_number())) %>% 
+  ungroup() %>% 
+  select(forecast, type, ds, yhat, y) %>% 
+  left_join(cleaned_df %>% 
+              mutate(naive = lag(y, n = 1, order_by = ds)) %>% 
+              drop_na() %>% 
+              select(ds, naive),
+            by =  "ds") %>% 
+  group_by(forecast, type) %>% 
+  summarise(mase = mean(abs(yhat - y)) / mean(abs(naive - y))) %>% 
+  ungroup() %>% 
+  group_by(type) %>% 
+  summarise(median = median(mase))
+
+```
+
+```{r}
+ts_tune %>% 
+  select(id, res) %>% 
+  unnest(res) %>% 
+  group_by(id, type) %>% 
+  arrange(ds) %>% 
+  mutate(forecast = paste0("forecast_", row_number())) %>% 
+  ungroup() %>% 
+  select(id, forecast, type, ds, yhat, y) %>% 
+  group_by(id, type) %>% 
+  mutate(naive_date = min(ds) - months(1)) %>% 
+  ungroup() %>% 
+  left_join(cleaned_df %>% 
+              mutate(naive = lag(y, n = 1, order_by = ds)) %>% 
+              drop_na() %>% 
+              select(ds, naive),
+            by =  c("naive_date" = "ds")) %>% 
+  group_by(forecast, type) %>% 
+  summarise(mase = mean(abs(yhat - y)) / mean(abs(naive - y))) %>% 
+  ungroup() %>% 
+  group_by(type) %>% 
+  summarise(median = median(mase))
+
+```
+
+En ambos casos el menor error se presenta en el tipo multiplicativo, por lo que, crearemos un segundo modelo pero ahora con el tipo de estacionalidad multiplicativa:
+
+```{r, message=FALSE}
+m2 <- prophet(df = cleaned_train %>% arrange(ds),
+              yearly.seasonality = T, 
+              seasonality.mode = "multiplicative")
+
+future2 <- make_future_dataframe(m2, periods = 12, freq = "month", include_history = TRUE)
+
+forecast2 <- predict(m2, future2)
+```
+
+Se grafica la serie con el pronostico:
+
+```{r}
+plot(m2, forecast2) + 
+  add_changepoints_to_plot(m2) +
+  scale_y_continuous(labels = scales::comma) +
+  labs(title = "Modelo Prophet 2: Pronóstico a 12 meses", y = "Salidas", x = "Año")
+```
+
+Volvamos a ver cómo quedo el pronóstico, o sea, en cuántos meses quedó por debajo y por arriba del valor real:
+
+```{r}
+# se valida el set de test
+s2 <- forecast2 %>% 
+  inner_join(cleaned_test, by = "ds") %>% 
+  mutate(
+    dif = (y-yhat), 
+    esPositivo = dif >= 0)
+
+s2 %>% 
+  ggplot(aes(x = ds, y = dif, fill = esPositivo)) + 
+  geom_col(position = "identity") +
+  scale_fill_manual(values = c("firebrick4", "dodgerblue4")) +
+  scale_y_continuous(labels = scales::comma) +
+  theme_minimal() + 
+  labs(title = "Diferencia Entre Salidas Esperadas y Actuales",
+          subtitle = "Las Salidas pronosticadas quedaron por debajo durante la mayor parte del año", y = "Diferencia", x = "Año")
+```
+
+En la gráfica anterior, ya se aprecian los datos para los primeros meses más cercanos a las observaciones reales, sin embargo, este modelo subestimó el mes de julio. Veamos la gráfica de dispersión de las observaciones esperadas y reales: 
+
+```{r, message=FALSE}
+qplot(s2$y, s2$yhat, log = "xy") +
+  geom_abline() +
+  scale_y_continuous(labels = scales::comma) +
+  scale_x_continuous(labels = scales::comma) +
+  labs(title = "Comparando las Observaciones Esperadas vs Reales", 
+       y = "Salidas Esperadas",
+       x = "Salidas Reales") +
+  theme_minimal()
+```
+
+Se aprecia que las predicciones se ajustan mejor a los datos reales.
+
+Se revisan los errores:
+
+```{r}
+mape <- function(y, yhat) {
+  return(mean(abs(y - yhat)/ y)*100)
+}
+
+eval2 <- cleaned_test %>% 
+  left_join(forecast2, by = "ds") %>% 
+  select(ds, y, yhat, yhat_upper, yhat_lower) 
+
+mape.prophet.f <- mape(eval2$y, eval2$yhat)
+
+cat("MAPE del modelo Prophet: ",`mape.prophet.f`)
+
+```
+
+Se grafica el pronóstico:
+
+```{r}
+plot(m2, forecast2) +
+  add_changepoints_to_plot(m2) +
+  geom_point(cleaned_test, mapping = aes(as.POSIXct(ds), y), col = "red") +
+  scale_y_continuous(labels = scales::comma) +
+  labs(title = "Pronóstico Modelo Prophet Multiplicativo", y = "Salidas", x = "Año")
+```
+
+Este modelo se ve y se ajusta mejor, además, el error de test bajó a 1.88, por lo que, nos quedamos con este segundo modelo multiplicativo.
+
+# <span style="color:rgb(0, 0, 205)">Ensamble</span>
+
+Son tres los modelos que generaron un bajo error MAPE en el conjunto de prueba, por lo que, los vamos a combinar esperando obtener un modelo más robusto. Para hacer lo anterior, crearemos una función que haga el ensamble de los siguientes modelos: 
+
+* ets con el alpha óptimo
+* arima 1
+* prophet multiplicativo
+
+Se crea la función:
+
+```{r}
+ensamble <- function(df, n_pronosticos) {
+  
+  N <- nrow(df)
+  n <- n_pronosticos
+  fin <- N - n
+  
+  inicio.train <- df$Fecha[fin]
+  inicio.test <- df$Fecha[fin]+1
+  
+  df_train <- df[1:fin,]
+  df_train <- ts(df_train[,2], start = inicio.train, frequency = 12)
+  
+  df_test <- df[(fin + 1):N,] %>% ts(start = inicio.test, frequency = 12)
+  df_test <- ts(df_test[,2], start = inicio.test, frequency = 12)
+  
+  h <- n
+  
+  fit.ets <- ets(df_train,
+                model = "ZZZ",
+                damped = T,
+                additive.only = T,
+                lambda = "auto",
+                alpha = alpha.min$alpha
+                )
+  prediccion.ets <- forecast(fit.ets, h = h)$mean %>% as.vector()
+  
+  
+  arima <- auto.arima(df_train)
+  prediccion.arima <- forecast(arima, h = h)$mean %>% as.vector()
+  
+  
+  
+  cleaned_train <- df[1:fin,] %>% 
+    rename(ds = Fecha,
+         y = Salidas) %>% 
+  mutate(ds = as.Date(ds, "%d/%m/%Y"))
+
+  cleaned_test <- df[(fin + 1):N,] %>% 
+    rename(ds = Fecha,
+         y = Salidas) %>% 
+  mutate(ds = as.Date(ds, "%d/%m/%Y"))
+  
+  m.prophet <- prophet(df = cleaned_train %>% arrange(ds),
+              yearly.seasonality = T, 
+              seasonality.mode = "multiplicative")
+
+  future <- make_future_dataframe(m.prophet, 
+                                   periods = h,
+                                   freq = "month",
+                                   include_history = TRUE)
+
+  fc.prophet <- predict(m.prophet, future)
+
+  prediccion.prophet <- cleaned_test %>% 
+  left_join(fc.prophet, by = "ds") %>% 
+  select(yhat) %>% as.vector()
+  
+  
+  
+  prediccion.ensamble <- (prediccion.ets + prediccion.arima + prediccion.prophet)/3
+  
+  return(data_frame(Fecha = cleaned_test$ds,
+                    Actual = df_test %>% as.vector(), 
+                    Prediccion = prediccion.ensamble %>% as.vector() %>% round(0), 
+                    Error = (Prediccion - Actual) %>% as.vector(),
+                    Error_Porcentual = round((Error / Actual)*100, 2)))
+} 
+
+```
+
+Veamos los resultados del ensamble:
+
+```{r message=FALSE}
+# Usamos la función: 
+df_ensamble <- ensamble(salidas, 12)
+
+df_ensamble$Prediccion <- df_ensamble$Prediccion$yhat
+df_ensamble$Error <- df_ensamble$Error$yhat
+
+
+df_ensamble %>% kbl(align = "c",
+                    digits = 2 , 
+                    format.args = list(big.mark = ",")) %>%
+  kable_paper("hover", full_width = F)
+
+```
+
+<div class=text-justify>
+Los pronósticos se acercan a los datos reales de test, que corresponden al año 2019, sin embargo, el mes de mayo quedó subestimado y, por el contrario, el mes de julio quedó sobreestimado esto es debido a la influencia del modelo Prophet. Ahora, comparemos los errores de los tres modelos con el del ensamble para ver si valio la pena aplicar esta técnica.
+</div>
+
+```{r}
+# Se crea una function que calcule algunas medidas de evaluación: 
+eval_medidas <- function(df_modelo) {
+  
+  act <- df_modelo %>% pull(Actual)
+  pred <- df_modelo %>% pull(Prediccion)
+  err <- act - pred 
+  per_err <- abs(err / act)
+  
+  # Mean Absolute Error (MAE): 
+  mae <- err %>% abs() %>% mean()
+  
+  # Mean Squared Error (MSE): 
+  mse <- mean(err^2)
+  
+  # Mean Absolute Percentage Error (MAPE): 
+  mape <- mean(per_err)*100
+  
+  # Retorna los resultadoss: 
+  return(data_frame(MAE = mae, MSE = mse, MAPE = mape, N = length(act)))
+}
+
+# Data Frame ets: 
+df_ets <- data_frame(Actual = salidas.ts.test %>% as.vector(), 
+                       Prediccion = fc.ets$mean %>% as.vector() %>% round(0), 
+                       Error = Prediccion - Actual,
+                       Error_Porcentual = round(Error / Actual, 2))
+
+# Data Frame arima: 
+df_arima <- data_frame(Actual = salidas.ts.test %>% as.vector(), 
+                       Prediccion = fc.fitarima1$mean %>% as.vector() %>% round(0), 
+                       Error = Prediccion - Actual,
+                       Error_Porcentual = round(Error / Actual, 2))
+
+# Data Frame prophet: 
+df_prophet <- data_frame(Actual = salidas.ts.test %>% as.vector(), 
+                       Prediccion = s2$yhat %>% as.vector() %>% round(0), 
+                       Error = Prediccion - Actual,
+                       Error_Porcentual = round(Error / Actual, 2))
+
+# Comparando los tres modelos: 
+
+bind_rows(df_ets %>% eval_medidas(), 
+          df_arima %>% eval_medidas(), 
+          df_prophet %>% eval_medidas(),
+          df_ensamble %>% eval_medidas) %>%
+  mutate(MODELO = c("ETS", "ARIMA", "PROPHET", "ENSAMBLE")) %>% 
+  select(MODELO, everything()) %>% 
+  mutate_if(is.numeric, function(x) {round(x, 2)}) %>%
+  arrange(desc(-MAPE)) %>% 
+  kbl(align = "c",
+                    digits = 2 , 
+                    format.args = list(big.mark = ",")) %>%
+  kable_paper("hover", full_width = F)
+
+```
+&nbsp;
+
+Después de hacer el ensamble de los tres mejores modelos a final de cuentas no se pudo mejorar el MAPE del mejor modelo, el arima, lo anterior, no es de sorprender, pues el ensamble se recomienda cuando los modelos que se juntarán presentan diferencias entre ellos, lo que en este caso no ocurrió.
+
+# <span style="color:rgb(0, 0, 205)">Modelo final</span>
+&nbsp;
+
+Por lo anterior, nos quedamos con el modelo **arima**, que tuvo un MAPE de test de 1.09%.
+
+Vamos a pronosticar con ese modelo el primer bimestre de 2020, ya que esos meses no están afectados por la pandemia en México, ya que el confinamiento empezó a finales de marzo:
+
+```{r}
+# se cargan los datos
+salidas.2020.C <- read.csv("Salidas_Nacionales_C.csv")
+salidas.2020.C.ts <- ts(salidas.2020.C[,2], 
+                      start = c(2008, 1),
+                      end = c(2020, 2),
+                      frequency = 12)
+
+ts_info(salidas.2020.C.ts)
+
+# Outliers
+tsoutliers(salidas.2020.C.ts)
+salidas.2020.C.ts <- tsclean(salidas.2020.C.ts)
+
+
+# data real a pronosticar
+salidas.2020 <- read.csv("Salidas_Nacionales_2020.csv")
+
+salidas.2020.ts <- ts(salidas.2020[,2], 
+                      start = c(2020, 1),
+                      end = c(2020, 2),
+                      frequency = 12)
+
+ts_info(salidas.2020.ts)
+
+```
+
+Se crea el modelo:
+
+```{r}
+fitarima.final <- auto.arima(salidas.ts)
+fitarima.final
+
+coeftest(fitarima.final)
+summary(fitarima.final)
+```
+
+Análisis de los residuales:
+
+```{r}
+checkresiduals(fitarima.final)
+
+```
+
+Análisis de la normalidad:
+
+```{r}
+qqnorm(fitarima.final$residuals)
+qqline(fitarima.final$residuals)
+
+jarque.bera.test(fitarima.final$residuals)
+```
+
+```{r}
+ggtsdiag(fitarima.final)
+```
+
+Este modelo final no presenta autocorrelación en sus residuales, ya que su gráfica no muestra tendencia y sí pasa el test de Ljung-Boxy, además, éstos se distribuyen normalmente. En su correlograma los coeficientes no rebasan los límites. Por lo anterior, el modelo es apto para pronosticar.
+
+Se hace la predicción de los próximos 2 meses:
+
+```{r}
+fc.fitarima.final <- forecast(fitarima.final, h = 2)
+forecast::accuracy(fc.fitarima.final, salidas.2020.ts)
+```
+
+```{r, message=FALSE}
+autoplot(fc.fitarima.final) + 
+  scale_y_continuous(labels = scales::comma) +
+  labs(title = "Pronóstico Arima Final: Salidas 2020", y = "Salidas")
+```
+
+```{r}
+test_forecast(forecast.obj = fc.fitarima.final, 
+              actual = salidas.2020.C.ts,
+              test = salidas.2020.ts) %>%
+  layout(legend = list(x = 0.1, y = 0.95))
+
+```
+
+<div class=text-justify>
+El error MAPE del modelo es: `r forecast::accuracy(fc.fitarima.final, salidas.2020.ts)[2,5]`. Hay que tener presente que los argumentos de este modelo son diferentes al modelo arima1 creado anteriormente, esto debido a que para su construcción se utilizó toda la serie histórica, desde enero de 2008 hasta diciembre de 2019, por lo tanto, ya no evaluamos el modelo con un conjunto de test, sino que directamente lo evaluamos sobre los datos reales de enero-febrero de 2020 (que son las observaciones que se pronosticaron).
+</div>
+
+```{r}
+# Data Frame arima final: 
+data_frame(Fecha = salidas.2020$Fecha %>% as.vector(),
+           Actual = salidas.2020.ts %>% as.vector(), 
+           Prediccion = fc.fitarima.final$mean %>% as.vector() %>% round(0), 
+           Error = abs(Prediccion - Actual),
+           Error_Porcentual = round(Error / Actual, 2)) %>% 
+  kbl(caption = "PRONÓSTICO ENERO-FEBRERO 2020", align = "c",
+                    digits = 4 , 
+                    format.args = list(big.mark = ",")) %>%
+  kable_paper("hover", full_width = F)
+
+```
+
+# <span style="color:rgb(0, 0, 205)">Conclusiones</span>
+
+<div class=text-justify>
+La serie presentó cambio de tendencia en el año 2011 debido a diversos factores coyunturales que se presentaron a lo largo del periodo 2008-2011, como la crisis financiera de 2009, la pandemia de Influenza H1N1 y la quiebra de la empresa Mexinana de Aviación.
+
+Se detectaron patrones estacionales en los meses de julio, agosto y diciembre (periodo de alta demanda) y en enero, febrero y septiembre (periodo de baja demanda).
+
+Cuando se vaya a trabajar con series de tiempo es de suma importancia el hacer primero un análisis visual a la serie o series, ya que eso permitirá conocer si hay presencia de tendencia, su tipo y si existe sospecha de algún patrón estacional. Lo anterior, permitirá identificar el tipo de algoritmo a usar, ya que hay algunos que no están diseñados para modelar más de un patrón estacional como los de suavisado exponencial o arima.
+
+Es altamente recomendable hacer un primer modelo que será la base a partir del cual se tratará de mejorarlo de acuerdo con la métrica elegida para su evaluación y, además, no olvidar que la evaluación se debe de hacer en la parte de prueba, es decir, sobre el conjunto de datos que el algoritmo no ha visto.
+
+Cuando se opte por hacer un ensamble de modelos se debe tener en cuenta que esta estratégia funcionará mejor si los modelos a juntar presentan diferencias marcadas entre sí, porque de lo contrario se puede generar un peor resultado.
+</div>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
