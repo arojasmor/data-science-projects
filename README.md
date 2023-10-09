@@ -4,7 +4,7 @@
 
 Bienvenido a mi repositorio de proyectos de **Data Science** y **Machine Learning**. Aquí encontrarás una colección de proyectos relacionados
 con la analítica y cuyo objetivo es el de mostrar mis habilidades y experiencia en dichos campos, además, combino lenguajes de programación
-populares como lo son **Python** y **R**, por lo que, algunos proyactos están elaborados en notebooks de Jupyter y otros en RStudio.
+populares como lo son **Python** y **R**, por lo que, algunos proyectos están elaborados en notebooks de Jupyter y otros en RStudio.
 
 ## Proyectos
 1. [Predicción Abandono Clientes Ecommerce](https://github.com/arojasmor/abandono-clientes)
@@ -28,7 +28,7 @@ populares como lo son **Python** y **R**, por lo que, algunos proyactos están e
    - **Tecnologías usadas:** Técnicas de minería de datos y análisis exploratorio.
    - **Resultados:** Detección de estacionalidad y área de oportunidad en precios.
 6. [Análisis de Quejas Citibanamex](https://github.com/arojasmor/Quejasbnmx)
-   - **Descripción:** Analizar quejas vía Twitter de usurarios.
+   - **Descripción:** Analizar quejas vía Twitter de usuarios.
    - **Tecnologías usadas:** Técnicas de procesamiento del lenguaje natural (NLP).
    - **Resultados:** Clientes disgustados por errores en las apps y por el mal servicio.
 7. [Fuga de Clientes Bancarios](https://github.com/arojasmor/FugaClientes)
@@ -40,7 +40,7 @@ populares como lo son **Python** y **R**, por lo que, algunos proyactos están e
    - **Tecnologías usadas:** ETS: ExponenTial Smoothing, ARIMA: AutoRegressive Integrated Moving Average, TSLM: Time Series Linear Model y Prophet.
    - **Resultados:** Se obtuvo un mape de 1.09%.
 9. [Segmentación Clientes Retail](https://github.com/arojasmor/SegmentacionRetail)
-   - **Descripción:** Segmentar a clientes de comercio online del Reino Unido.
+   - **Descripción:** Segmentar a clientes de un comercio online del Reino Unido.
    - **Tecnologías usadas:** K-Means, Árbol de Decisión y Reglas de Asociación (Apriori).
    - **Resultados:** Se determinaron 3 clusters y 12 reglas de negocio.
 
