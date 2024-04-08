@@ -4,7 +4,7 @@
 
 Bienvenido a mi repositorio de proyectos de **Data Science** y **Machine Learning**. Aquí encontrarás una colección de proyectos relacionados
 con la analítica y cuyo objetivo es el de mostrar mis habilidades y experiencia en dichos campos, además, combino lenguajes de programación
-populares como lo son **Python** y **R**, por lo que, algunos proyectos están elaborados en notebooks de Jupyter y otros en RStudio.
+populares como lo son **Python**, **R** y **SQL**, por lo que, algunos proyectos están elaborados en notebooks de Jupyter y otros en RStudio.
 
 ## Proyectos
 1. [Predicción Abandono Clientes Ecommerce](https://github.com/arojasmor/abandono-clientes)
@@ -43,5 +43,9 @@ populares como lo son **Python** y **R**, por lo que, algunos proyectos están e
    - **Descripción:** Segmentar a clientes de un comercio online del Reino Unido.
    - **Tecnologías usadas:** K-Means, Árbol de Decisión y Reglas de Asociación (Apriori).
    - **Resultados:** Se determinaron 3 clusters y 12 reglas de negocio.
+10. [Ejercicios SQL](https://github.com/arojasmor/ejercicios_MySQL#ejercicios-en-sql)
+   - **Descripción:** Análisis diversos a una empresa ficticia distribuidora de equipo para senderismo, aventura y montaña.
+   - **Tecnologías usadas:** MySQL y Python.
+   - **Resultados:** Consultas varias; una segmentación de clientes en base a pedidos y facturación; un sistema de recomendación basado en frecuencias.
 
 ¡¡¡Disfruta explorando mis proyectos de data science!!!
